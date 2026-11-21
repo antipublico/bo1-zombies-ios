@@ -49,13 +49,15 @@ real stack/heap addresses, eight-thread concurrent registration and table
 exhaustion. Integration into the engine's VM and expanded asset loader is pending.
 The table retains up to 255 distinct 16 MB address regions for the process lifetime.
 
-The decoder compiled as an Apple ARM64 Mach-O object. The memory and offline
-adapters compiled as Linux ARM64 objects. An Apple SDK is required to validate
-their iOS builds. The manually triggered workflow in
-`.github/workflows/portable-ios.yml` runs host tests and builds the three iOS
-libraries on a macOS runner. It has been prepared locally and awaits execution
-in a user-selected GitHub repository. App packaging and iPhone execution remain
-pending.
+The manually triggered workflow in `.github/workflows/portable-ios.yml` runs
+host tests and builds all three iOS libraries on a macOS runner. The
+[first iOS validation run](https://github.com/antipublico/bo1-zombies-ios/actions/runs/44935688430)
+passed on 2026-11-21 at commit `77983dd`. All four host tests passed, and Apple
+Clang compiled the decoder, memory and offline-service libraries with the
+`iphoneos` SDK for ARM64 and an iOS 15.0 deployment target. The run provides
+the `bo1-ios-arm64-libraries` artifact with three static libraries. This validates
+these components; full-engine integration, app linking, packaging and iPhone
+execution remain pending.
 
 The renderer candidate is BlackOpsARM's Vulkan implementation through
 [MoltenVK](https://github.com/KhronosGroup/MoltenVK) on iOS. Its Android surface,
