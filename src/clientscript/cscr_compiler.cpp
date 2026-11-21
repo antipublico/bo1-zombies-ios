@@ -7,6 +7,7 @@
 #include "cscr_parser.h"
 #include "cscr_evaluate.h"
 #include "cscr_vm.h"
+#include <platform/bo1_bytecode_io.h>
 
 #undef GetObject // what a shit horrible macro that ruins every project
 
@@ -67,8 +68,10 @@ unsigned int __cdecl Scr_GetBuiltin(scriptInstance_t inst, sval_u func_name)
 
 int __cdecl CompareCaseInfo(unsigned int *elem1, unsigned int *elem2)
 {
-    if ( *elem1 <= *elem2 )
-        return *elem1 < *elem2;
+    const auto key1 = bo1::bytecode::Load<std::uint32_t>(elem1);
+    const auto key2 = bo1::bytecode::Load<std::uint32_t>(elem2);
+    if ( key1 <= key2 )
+        return key1 < key2;
     else
         return -1;
 }
@@ -1785,7 +1788,7 @@ void __cdecl EmitGetInteger(scriptInstance_t inst, int value, sval_u sourcePos)
 void __cdecl EmitCodepos(scriptInstance_t inst, const char *pos)
 {
     gScrCompileGlob[inst].codePos = (unsigned __int8 *)TempMallocAlignStrict(4);
-    *(unsigned int *)gScrCompileGlob[inst].codePos = (unsigned int)pos;
+    bo1::bytecode::Store<std::uint32_t>(gScrCompileGlob[inst].codePos, static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pos)));
 }
 
 void __cdecl EmitGetFloat(scriptInstance_t inst, float value, sval_u sourcePos)
@@ -1798,7 +1801,7 @@ void __cdecl EmitGetFloat(scriptInstance_t inst, float value, sval_u sourcePos)
 void __cdecl EmitFloat(scriptInstance_t inst, float value)
 {
     gScrCompileGlob[inst].codePos = (unsigned __int8 *)TempMallocAlignStrict(4);
-    *(float *)gScrCompileGlob[inst].codePos = value;
+    bo1::bytecode::Store<float>(gScrCompileGlob[inst].codePos, value);
 }
 
 void __cdecl EmitGetString(scriptInstance_t inst, unsigned int value, sval_u sourcePos)
@@ -1812,7 +1815,7 @@ void __cdecl EmitGetString(scriptInstance_t inst, unsigned int value, sval_u sou
 void __cdecl EmitShort(scriptInstance_t inst, __int16 value)
 {
     gScrCompileGlob[inst].codePos = (unsigned __int8 *)TempMallocAlignStrict(2);
-    *(_WORD *)gScrCompileGlob[inst].codePos = value;
+    bo1::bytecode::Store<std::uint16_t>(gScrCompileGlob[inst].codePos, static_cast<std::uint16_t>(value));
 }
 
 void __cdecl EmitGetIString(scriptInstance_t inst, unsigned int value, sval_u sourcePos)
@@ -2231,15 +2234,15 @@ void __cdecl EmitCanonicalString(scriptInstance_t inst, unsigned int stringValue
     }
     else if (gScrCompilePub[inst].developer_statement == 3)
     {
-        *(_WORD *)gScrCompileGlob[inst].codePos = Scr_CompileCanonicalString(inst, stringValue);
-        if (!*(_WORD *)gScrCompileGlob[inst].codePos)
+        bo1::bytecode::Store<std::uint16_t>(gScrCompileGlob[inst].codePos, static_cast<std::uint16_t>(Scr_CompileCanonicalString(inst, stringValue)));
+        if (!bo1::bytecode::Load<std::uint16_t>(gScrCompileGlob[inst].codePos))
             CompileError(inst, 0, "unknown field");
     }
     else
     {
         if (gScrCompileGlob[inst].bConstRefCount)
             SL_AddRefToString(stringValue, inst);
-        *(_WORD *)gScrCompileGlob[inst].codePos = SL_TransferToCanonicalString(inst, stringValue);
+        bo1::bytecode::Store<std::uint16_t>(gScrCompileGlob[inst].codePos, static_cast<std::uint16_t>(SL_TransferToCanonicalString(inst, stringValue)));
     }
 }
 
@@ -3526,7 +3529,7 @@ void __cdecl EmitBoolOrExpression(
     {
         __debugbreak();
     }
-    *(_WORD *)pos = (_WORD)offset;
+    bo1::bytecode::Store<std::uint16_t>(pos, static_cast<std::uint16_t>((_WORD)offset));
 }
 
 void __cdecl EmitCastBool(scriptInstance_t inst, sval_u sourcePos)
@@ -3566,7 +3569,7 @@ void __cdecl EmitBoolAndExpression(
     {
         __debugbreak();
     }
-    *(_WORD *)pos = (_WORD)offset;
+    bo1::bytecode::Store<std::uint16_t>(pos, static_cast<std::uint16_t>((_WORD)offset));
 }
 
 char __cdecl EmitOrEvalBinaryOperatorExpression(
@@ -4082,7 +4085,7 @@ void __cdecl EmitIfStatement(
     {
         __debugbreak();
     }
-    *(_WORD *)pos = (_WORD)offset;
+    bo1::bytecode::Store<std::uint16_t>(pos, static_cast<std::uint16_t>((_WORD)offset));
 }
 
 void __cdecl EmitNOP2(scriptInstance_t inst, bool lastStatement, unsigned int endSourcePos, scr_block_s *block)
@@ -4276,14 +4279,14 @@ void __cdecl EmitIfElseStatement(
     {
         __debugbreak();
     }
-    *(_WORD *)pos1 = (_WORD)offset;
+    bo1::bytecode::Store<std::uint16_t>(pos1, static_cast<std::uint16_t>((_WORD)offset));
     Scr_TransferBlock(block, elseStatBlock->block);
     EmitStatement(inst, stmt2, lastStatement, endSourcePos, elseStatBlock->block);
     EmitNOP2(inst, lastStatement, endSourcePos, elseStatBlock->block);
     if (!*(_DWORD *)elseStatBlock->stringValue)
         childBlocks[childCount++] = (scr_block_s *)elseStatBlock->stringValue;
     if (!lastStatement)
-        *(_DWORD *)pos2 = TempMallocAlignStrict(0) - nextPos2;
+        bo1::bytecode::Store<std::uint32_t>(const_cast<char *>(pos2), static_cast<std::uint32_t>(TempMallocAlignStrict(0) - nextPos2));
     Scr_InitFromChildBlocks(childBlocks, childCount, block);
 }
 
@@ -4499,7 +4502,7 @@ void __cdecl EmitWhileStatement(
     {
         __debugbreak();
     }
-    *(_WORD *)gScrCompileGlob[inst].codePos = offset;
+    bo1::bytecode::Store<std::uint16_t>(gScrCompileGlob[inst].codePos, static_cast<std::uint16_t>(offset));
     if (pos2)
     {
         offset = TempMallocAlignStrict(0) - nextPos2;
@@ -4513,7 +4516,7 @@ void __cdecl EmitWhileStatement(
         {
             __debugbreak();
         }
-        *(_WORD *)pos2 = offset;
+        bo1::bytecode::Store<std::uint16_t>(const_cast<char *>(pos2), static_cast<std::uint16_t>(offset));
     }
     ConnectBreakStatements(inst);
     gScrCompileGlob[inst].bCanBreak = bOldCanBreak;
@@ -4572,7 +4575,7 @@ void __cdecl ConnectBreakStatements(scriptInstance_t inst)
     }
     codePos = TempMallocAlignStrict(0);
     for (breakStatement = gScrCompileGlob[inst].currentBreakStatement; breakStatement; breakStatement = breakStatement->next)
-        *(_DWORD *)breakStatement->codePos = codePos - breakStatement->nextCodePos;
+        bo1::bytecode::Store<std::uint32_t>(const_cast<char *>(breakStatement->codePos), static_cast<std::uint32_t>(codePos - breakStatement->nextCodePos));
 }
 
 void __cdecl ConnectContinueStatements(scriptInstance_t inst)
@@ -4585,7 +4588,7 @@ void __cdecl ConnectContinueStatements(scriptInstance_t inst)
         continueStatement;
         continueStatement = continueStatement->next)
     {
-        *(_DWORD *)continueStatement->codePos = codePos - continueStatement->nextCodePos;
+        bo1::bytecode::Store<std::uint32_t>(const_cast<char *>(continueStatement->codePos), static_cast<std::uint32_t>(codePos - continueStatement->nextCodePos));
     }
 }
 
@@ -4720,7 +4723,7 @@ void __cdecl EmitForStatement(
     {
         __debugbreak();
     }
-    *(_WORD *)gScrCompileGlob[inst].codePos = offset;
+    bo1::bytecode::Store<std::uint16_t>(gScrCompileGlob[inst].codePos, static_cast<std::uint16_t>(offset));
     if (pos2)
     {
         offset = TempMallocAlignStrict(0) - nextPos2;
@@ -4734,7 +4737,7 @@ void __cdecl EmitForStatement(
         {
             __debugbreak();
         }
-        *(_WORD *)pos2 = offset;
+        bo1::bytecode::Store<std::uint16_t>(const_cast<char *>(pos2), static_cast<std::uint16_t>(offset));
     }
     ConnectBreakStatements(inst);
     gScrCompileGlob[inst].bCanBreak = bOldCanBreak;
@@ -5009,7 +5012,7 @@ void __cdecl EmitSwitchStatement(
     AddOpcodePos(inst, sourcePos.stringValue, 0);
     EmitShort(inst, 0);
     pos2 = gScrCompileGlob[inst].codePos;
-    *(_DWORD *)pos1 = pos2 - (unsigned __int8 *)nextPos1;
+    bo1::bytecode::Store<std::uint32_t>(pos1, static_cast<std::uint32_t>(pos2 - (unsigned __int8 *)nextPos1));
     pos3 = TempMallocAlignStrict(0);
     num = 0;
     caseStatement = gScrCompileGlob[inst].currentCaseStatement;
@@ -5020,17 +5023,17 @@ void __cdecl EmitSwitchStatement(
         caseStatement = caseStatement->next;
         ++num;
     }
-    *(_WORD *)pos2 = num;
+    bo1::bytecode::Store<std::uint16_t>(pos2, static_cast<std::uint16_t>(num));
     qsort(pos3, num, 8u, (int(__cdecl *)(const void *, const void *))CompareCaseInfo);
     while (num > 1)
     {
-        if (*(_DWORD *)pos3 == *((_DWORD *)pos3 + 2))
+        if (bo1::bytecode::Load<std::uint32_t>(pos3) == bo1::bytecode::Load<std::uint32_t>(pos3 + 8))
         {
             for (caseStatementa = gScrCompileGlob[inst].currentCaseStatement;
                 caseStatementa;
                 caseStatementa = caseStatementa->next)
             {
-                if (caseStatementa->name == *(_DWORD *)pos3)
+                if (caseStatementa->name == bo1::bytecode::Load<std::uint32_t>(pos3))
                 {
                     CompileError(inst, caseStatementa->sourcePos, "duplicate case expression");
                     return;

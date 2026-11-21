@@ -560,6 +560,9 @@ set(CLIENT_MP_FILES
 set(SRC_CLIENTSCRIPT
 	"${SRC_DIR}/clientscript/cscr_animtree.cpp"
 	"${SRC_DIR}/clientscript/cscr_animtree.h"
+	"${SRC_DIR}/clientscript/cscr_bytecode.cpp"
+	"${SRC_DIR}/clientscript/cscr_bytecode.h"
+	"${SRC_DIR}/platform/bo1_bytecode_io.h"
 	"${SRC_DIR}/clientscript/cscr_compiler.cpp"
 	"${SRC_DIR}/clientscript/cscr_compiler.h"
 	"${SRC_DIR}/clientscript/cscr_debugger.cpp"

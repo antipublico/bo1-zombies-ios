@@ -1,4 +1,4 @@
-name: Portable components and iOS libraries
+name: Portable components and iOS app
 
 on:
   workflow_dispatch:
@@ -9,18 +9,21 @@ permissions:
 jobs:
   portable-and-ios:
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Build host components
+      - name: Build and test host components with sanitizers
         run: |
-          cmake -S . -B build/host -DBO1_PORTABLE_TOOLS=ON -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build/host -DBO1_PORTABLE_TOOLS=ON -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           cmake --build build/host --parallel 3
           ctest --test-dir build/host --output-on-failure
-      - name: Build iOS ARM64 libraries
+      - name: Build iOS ARM64 app and libraries
         run: |
-          cmake -S . -B build/ios \
+          cmake -S . -B build/ios -G Xcode \
             -DBO1_PORTABLE_TOOLS=ON \
+            -DBO1_BUILD_IOS_APP=ON \
             -DBO1_BUILD_FASTFILE_INSPECTOR=OFF \
             -DBUILD_TESTING=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -28,13 +31,49 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build/ios --parallel 3
-          xcrun lipo -info build/ios/libbo1_fastfile_format.a
-          xcrun lipo -info build/ios/libbo1_narrow32.a
-          xcrun lipo -info build/ios/libbo1_steam_offline.a
-      - uses: actions/upload-artifact@v4
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+          cmake --build build/ios --config Release --parallel 3
+          xcrun lipo -info build/ios/Release-iphoneos/BO1Zombies.app/BO1Zombies
+          mkdir -p build/package/Payload
+          cp -R build/ios/Release-iphoneos/BO1Zombies.app build/package/Payload/
+          cd build/package
+          zip -qry ../BO1Zombies-unsigned.ipa Payload
+      - name: Build iOS simulator app
+        run: |
+          cmake -S . -B build/simulator -G Xcode \
+            -DBO1_PORTABLE_TOOLS=ON \
+            -DBO1_BUILD_IOS_APP=ON \
+            -DBO1_BUILD_FASTFILE_INSPECTOR=OFF \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphonesimulator \
+            -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+          cmake --build build/simulator --config Release --parallel 3
+      - name: Run native checks in iPhone simulator
+        timeout-minutes: 10
+        run: |
+          python3 tools/ios_simulator_smoke.py \
+            build/simulator/Release-iphonesimulator/BO1Zombies.app \
+            --output build/simulator-results
+      - name: Upload iOS libraries
+        uses: actions/upload-artifact@v4
         with:
           name: bo1-ios-arm64-libraries
-          path: build/ios/libbo1_*.a
+          path: build/ios/Release-iphoneos/libbo1_*.a
           if-no-files-found: error
+      - name: Upload unsigned development app
+        uses: actions/upload-artifact@v4
+        with:
+          name: bo1-ios-development-unsigned
+          path: build/BO1Zombies-unsigned.ipa
+          if-no-files-found: error
+      - name: Upload simulator results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bo1-ios-simulator-results
+          path: build/simulator-results/
+          if-no-files-found: warn

@@ -12,6 +12,7 @@
 #include "cscr_memorytree.h"
 
 #include <cstring>
+#include <platform/bo1_bytecode_io.h>
 #include <xmmintrin.h>
 #include <qcommon/common.h>
 #include <minwindef.h>
@@ -448,7 +449,7 @@ char *__cdecl Scr_GetNextCodepos(
                 value.type = type;
                 AddRefToValue(inst, type, value.u);
                 Scr_CastBool(inst, &value);
-                v15 = *(_WORD *)pos;
+                v15 = bo1::bytecode::Load<std::uint16_t>(pos);
                 pos += 2;
                 if (gScrVarPub[inst].error_message)
                     goto LABEL_76;
@@ -473,7 +474,7 @@ char *__cdecl Scr_GetNextCodepos(
                 value.type = v8;
                 AddRefToValue(inst, v8, value.u);
                 Scr_CastBool(inst, &value);
-                v14 = *(_WORD *)pos;
+                v14 = bo1::bytecode::Load<std::uint16_t>(pos);
                 pos += 2;
                 if (gScrVarPub[inst].error_message)
                     goto LABEL_76;
@@ -492,12 +493,12 @@ char *__cdecl Scr_GetNextCodepos(
                 else
                     return (char *)pos;
             case 98:
-                return (char *)&pos[*(_DWORD *)pos + 4];
+                return (char *)&pos[bo1::bytecode::Load<std::uint32_t>(pos) + 4];
             case 99:
-                return (char *)&pos[-*(unsigned __int16 *)pos + 2];
+                return (char *)&pos[-bo1::bytecode::Load<std::uint16_t>(pos) + 2];
             case 124:
-                posb = &pos[*(_DWORD *)pos + 4];
-                v13 = *(_WORD *)posb;
+                posb = &pos[bo1::bytecode::Load<std::uint32_t>(pos) + 4];
+                v13 = bo1::bytecode::Load<std::uint16_t>(posb);
                 posa = posb + 2;
                 caseCount = v13;
                 v10 = top->type;
@@ -527,7 +528,7 @@ char *__cdecl Scr_GetNextCodepos(
                 }
                 break;
             case 125:
-                return (char *)&pos[8 * *(unsigned __int16 *)pos + 2];
+                return (char *)&pos[8 * bo1::bytecode::Load<std::uint16_t>(pos) + 2];
             default:
                 v9 = va("unknown opcode %d", opcode);
                 if (!Assert_MyHandler("C:\\projects_pc\\cod\\codsrc\\src\\clientscript\\cscr_vm.cpp", 3269, 0, v9))
@@ -541,7 +542,7 @@ char *__cdecl Scr_GetNextCodepos(
             }
             do
             {
-                v12 = *(_DWORD *)posa;
+                v12 = bo1::bytecode::Load<std::uint32_t>(posa);
                 posc = posa + 4;
                 v11 = *(const char **)posc;
                 posa = posc + 4;
@@ -826,7 +827,7 @@ const char *__cdecl Scr_GetStackThreadPos(
     while (size)
     {
         bufa = buf - 4;
-        u.intValue = *(int *)bufa;
+        u.intValue = bo1::bytecode::Load<std::int32_t>(bufa);
         buf = bufa - 1;
         --size;
         if (*buf == 7)
@@ -1185,7 +1186,7 @@ void __cdecl VM_Notify(
                             }
                             if (tempValue3.type == 8)
                                 break;
-                            tempValue3.u.intValue = *(_DWORD *)++buf;
+                            tempValue3.u.intValue = bo1::bytecode::Load<std::uint32_t>(++buf);
                             buf += 4;
                             AddRefToValue(inst, tempValue3.type, tempValue3.u);
                             type = currentValue->type;
@@ -1349,7 +1350,7 @@ void __cdecl VM_Notify(
                                 __debugbreak();
                             }
                             *buf++ = currentValue->type;
-                            *(_DWORD *)buf = currentValue->u.intValue;
+                            bo1::bytecode::Store<std::int32_t>(buf, currentValue->u.intValue);
                             buf += 4;
                             --newSize;
                         } while (newSize);
@@ -1812,7 +1813,7 @@ void __cdecl VM_TrimStack(
     while (size)
     {
         bufa = buf - 4;
-        u.intValue = *(int *)bufa;
+        u.intValue = bo1::bytecode::Load<std::int32_t>(bufa);
         buf = bufa - 1;
         --size;
         if (*buf == 7)
@@ -2074,41 +2075,11 @@ unsigned int __cdecl Scr_GetLocalVar(scriptInstance_t inst, const char *pos)
     return gScrVmPub[inst].localVars[-*(unsigned __int8 *)pos];
 }
 
-unsigned __int16 __cdecl Scr_ReadUnsignedShort(const char **pos)
-{
-    __int16 v2; // [esp+0h] [ebp-4h]
-
-    v2 = *(_WORD *)*pos;
-    *pos += sizeof(short);
-    return v2;
-}
-
-uintptr_t Scr_ReadUnsigned(const char **pos)
-{
-    uintptr_t value = *(reinterpret_cast<const uintptr_t *>(*pos));
-    *pos += sizeof(uintptr_t);
-    return value;
-}
-
 const float *Scr_ReadVector(const char **pos)
 {
     const float *value = reinterpret_cast<const float *>(*pos);
     *pos += (sizeof(float) * 3);
     return value;
-}
-
-float Scr_ReadFloat(const char **pos)
-{
-    float value = *(reinterpret_cast<const float *>(*pos));
-    *pos += sizeof(float);
-    return value;
-}
-
-int Scr_ReadInt(const char **pos)
-{
-    int value = *(int *)*pos;
-    *pos += sizeof(int);
-    return value ;
 }
 
 const unsigned int *Scr_ReadIntArray(const char **pos, int count)
@@ -2122,11 +2093,9 @@ const unsigned int *Scr_ReadIntArray(const char **pos, int count)
 
 const char *__cdecl Scr_ReadCodePos(scriptInstance_t inst, const char **pos)
 {
-    int v3; // [esp+0h] [ebp-8h]
-
-    v3 = *(unsigned int *)*pos;
-    *pos += 4;
-    return (const char *)v3;
+    // The code-position representation is still the original 32-bit address.
+    // Narrow32 relocation is introduced with the remaining VM pointer changes.
+    return reinterpret_cast<const char *>(Scr_ReadUnsigned(pos));
 }
 
 unsigned int __cdecl GetDummyObject(scriptInstance_t inst)
@@ -2217,7 +2186,7 @@ VariableStackBuffer *__cdecl VM_ArchiveStack(scriptInstance_t inst, function_sta
         }
         else
         {
-            *(_DWORD *)bufa = top->u.intValue;
+            bo1::bytecode::Store<std::int32_t>(bufa, top->u.intValue);
         }
         buf = bufa - 1;
         if (top->type >= 0x100u
@@ -5149,7 +5118,7 @@ thread_return:
             {
                 __debugbreak();
             }
-            v78 = *(_WORD *)localFs.pos;
+            v78 = bo1::bytecode::Load<std::uint16_t>(localFs.pos);
             localFs.pos += 2;
             Variable = FindVariable(inst, objectId, v78);
             v95 = Scr_EvalVariable(inst, Variable);
@@ -5207,7 +5176,7 @@ thread_return:
             {
                 __debugbreak();
             }
-            v77 = *(_WORD *)localFs.pos;
+            v77 = bo1::bytecode::Load<std::uint16_t>(localFs.pos);
             localFs.pos += 2;
             VariableField = Scr_FindVariableField(inst, objectId, v77);
             v94 = VariableField;
@@ -5227,20 +5196,20 @@ thread_return:
             goto EvalFieldVariableRef;
         case OP_EvalFieldVariableRef:
         EvalFieldVariableRef:
-            v76 = *(_WORD *)localFs.pos;
+            v76 = bo1::bytecode::Load<std::uint16_t>(localFs.pos);
             localFs.pos += 2;
             fieldValueIndex = Scr_GetVariableFieldIndex(inst, objectId, v76);
             fieldValueId = gScrVarGlob[inst].variableList[fieldValueIndex + VARIABLELIST_CHILD_BEGIN(inst)].hash.id;
             continue;
         case OP_ClearFieldVariable:
-            v75 = *(_WORD *)localFs.pos;
+            v75 = bo1::bytecode::Load<std::uint16_t>(localFs.pos);
             localFs.pos += 2;
             ClearVariableField(inst, objectId, v75, localFs.top);
             continue;
         case OP_SafeCreateVariableFieldCached:
             ++gScrVmPub[inst].localVars;
             ++localFs.localVarCount;
-            v74 = *(_WORD *)localFs.pos;
+            v74 = bo1::bytecode::Load<std::uint16_t>(localFs.pos);
             localFs.pos += 2;
             *gScrVmPub[inst].localVars = GetNewVariable(inst, localFs.localId, v74);
             goto $LN261_1;
@@ -5364,7 +5333,7 @@ thread_return:
             fieldValueId = gScrVmPub[inst].localVars[-(unsigned __int8)*localFs.pos++];
             continue;
         case OP_SetLevelFieldVariableField:
-            v73 = *(_WORD *)localFs.pos;
+            v73 = bo1::bytecode::Load<std::uint16_t>(localFs.pos);
             localFs.pos += 2;
             top = localFs.top;
             v9 = GetVariable(inst, gScrVarPub[inst].levelId, v73);
@@ -5373,14 +5342,14 @@ thread_return:
         case OP_SetVariableField:
             goto $LN1040;
         case OP_SetAnimFieldVariableField:
-            v71 = *(_WORD *)localFs.pos;
+            v71 = bo1::bytecode::Load<std::uint16_t>(localFs.pos);
             localFs.pos += 2;
             v62 = localFs.top;
             v10 = GetVariable(inst, gScrVarPub[inst].animId, v71);
             SetVariableValue(inst, v10, v62);
             goto loop_dec_top;
         case OP_SetSelfFieldVariableField:
-            v72 = *(_WORD *)localFs.pos;
+            v72 = bo1::bytecode::Load<std::uint16_t>(localFs.pos);
             localFs.pos += 2;
             fieldName = v72;
             objectId = Scr_GetSelf(inst, localFs.localId);
@@ -5432,7 +5401,7 @@ thread_return:
 CallBuiltin:
             iassert(!gScrVmPub[inst].inparamcount);
             debugpos = localFs.pos;
-            v70 = *(_WORD *)localFs.pos;
+            v70 = bo1::bytecode::Load<std::uint16_t>(localFs.pos);
             localFs.pos += 2;
             builtinIndex = v70;
             gScrVmPub[inst].function_frame->fs.pos = localFs.pos;
@@ -5471,7 +5440,7 @@ CallBuiltin:
             iassert(!gScrVmPub[inst].inparamcount);
             debugpos = localFs.pos;
             gScrVmPub[inst].top = localFs.top - 1;
-            v69 = *(_WORD *)localFs.pos;
+            v69 = bo1::bytecode::Load<std::uint16_t>(localFs.pos);
             localFs.pos += 2;
             builtinIndex = v69;
             if (localFs.top->type != VAR_POINTER)

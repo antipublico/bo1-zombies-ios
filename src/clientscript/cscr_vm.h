@@ -1,4 +1,5 @@
 #pragma once
+#include "cscr_bytecode.h"
 #include "cscr_variable.h"
 #include <bgame/bg_local.h>
 #include <universal/dvar.h>
@@ -328,7 +329,6 @@ void __cdecl Scr_CancelWaittill(scriptInstance_t inst, unsigned int startLocalId
 unsigned int __cdecl Scr_ExecThread(scriptInstance_t inst, int handle, unsigned int paramcount);
 unsigned int __cdecl VM_Execute(scriptInstance_t inst, unsigned int localId, char *pos, unsigned int paramcount);
 unsigned int __cdecl Scr_GetLocalVar(scriptInstance_t inst, const char *pos);
-unsigned __int16 __cdecl Scr_ReadUnsignedShort(const char **pos);
 const char *__cdecl Scr_ReadCodePos(scriptInstance_t inst, const char **pos);
 unsigned int __cdecl GetDummyObject(scriptInstance_t inst);
 int __cdecl GetDummyFieldValue(scriptInstance_t inst);

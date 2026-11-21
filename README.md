@@ -9,7 +9,8 @@ Decompiled engine code for Black Ops 1 Zombies, so mods can change the engine it
 The iOS port work includes a portable fastfile header decoder, shared by the
 engine loader and a standalone inspection tool. The decoder reads explicit
 little-endian fields without assuming pointer size or buffer alignment. The
-inspector also checks the decompressed size and asset-list counts. Gameplay,
+inspector also decodes script strings and the asset directory with bounded
+retained metadata and streaming decompression. Gameplay,
 rendering, audio and asset reconstruction still require platform work.
 
 With CMake and a C/C++ compiler installed, build and test the portable components
@@ -25,16 +26,18 @@ Run `bo1_fastfile_inspect <path-to-zone.ff>` from the build output directory.
 It reads the package header and checks the complete compressed stream using the
 engine's bundled zlib. Authenticated packages follow the existing loader's
 unsupported path. The output reports declared sizes and actual decompressed
-bytes. It does not reconstruct assets or establish that a map is playable.
+bytes, decoded string counts and asset types. It does not reconstruct assets or
+establish that a map is playable. Offset strings must reference an already
+decoded string in block 4. The API rejects unsupported references explicitly.
 
 For an iOS library build with an available Apple SDK, select the iOS toolchain
 and set `BO1_BUILD_FASTFILE_INSPECTOR=OFF` and `BUILD_TESTING=OFF`. This builds
-the decoder, memory and offline-service libraries. App packaging and device testing remain pending.
+the portable libraries, including the reusable inspection API and bytecode readers.
 
 All 101 FastFiles in the supplied PC installation passed envelope, decompression,
-declared-length and asset-list bounds checks. Kino's zone reports 908 assets and
-789 script strings. This validates package structure, with loading those assets
-into the game still pending.
+declared-length, script-string and asset-directory checks. Kino's zone reports
+908 assets and 789 script-string slots (788 present and one null). Its metadata
+consumes 24,399 decompressed bytes. Loading those assets into the game remains pending.
 
 Configure the desktop engine with `-DBO1_WITH_STEAM=OFF` to link the static
 unavailable-service backend. It activates the engine's existing offline paths.
@@ -58,6 +61,35 @@ Clang compiled the decoder, memory and offline-service libraries with the
 the `bo1-ios-arm64-libraries` artifact with three static libraries. This validates
 these components; full-engine integration, app linking, packaging and iPhone
 execution remain pending.
+
+The VM and compiler now share explicit little-endian scalar operand reads and
+writes. `Scr_ReadUnsigned` consumes four bytes on both x86 and ARM64, and packed
+scalar operands no longer require aligned C++ objects at the converted sites.
+The same reader functions have 223 checks on Windows x86 and x64. VM pointer
+relocation, vectors, other native-width assumptions and the full engine build
+remain pending; this is not yet a working 64-bit VM.
+
+The `BO1_BUILD_IOS_APP` target is a UIKit development app that links the native
+components and inspects a user-selected `.ff` file. It does not launch gameplay.
+The file stays at the selected location and is read using scoped access. The
+default limits are 512 MiB of input and decompressed data and 8 MiB of retained
+metadata (excluding allocator overhead). No game data is bundled or uploaded.
+
+The workflow also builds the device app, packages `BO1Zombies-unsigned.ipa`, and
+runs `--self-test` in an iPhone simulator using a synthetic fastfile. It captures
+a startup screenshot and publishes simulator logs as separate artifacts. The
+IPA must be signed before device installation; simulator success does not prove
+execution on an actual iPhone. Local Mac build commands follow the
+[CMake iOS toolchain configuration](https://cmake.org/cmake/help/latest/manual/cmake-toolchains.7.html#cross-compiling-for-ios-tvos-visionos-or-watchos):
+
+```sh
+cmake -S . -B build/ios -G Xcode -DBO1_BUILD_IOS_APP=ON \
+  -DBO1_BUILD_FASTFILE_INSPECTOR=OFF -DBUILD_TESTING=OFF \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+  -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+cmake --build build/ios --config Release
+```
 
 The renderer candidate is BlackOpsARM's Vulkan implementation through
 [MoltenVK](https://github.com/KhronosGroup/MoltenVK) on iOS. Its Android surface,

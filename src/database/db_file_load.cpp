@@ -491,7 +491,20 @@ void __cdecl DB_LoadXFileInternal()
 void Load_XAssetListCustom()
 {
     varXAssetList = &g_varXAssetList;
-    DB_LoadXFileData((unsigned __int8 *)&g_varXAssetList, 16);
+    unsigned char serialized[bo1::fastfile::AssetListHeaderSize];
+    DB_LoadXFileData(serialized, sizeof(serialized));
+    bo1::fastfile::AssetListHeader header{};
+    if (bo1::fastfile::ParseAssetListHeader(serialized, sizeof(serialized), header) != bo1::fastfile::ParseResult::Ok)
+    {
+        Com_Error(ERR_DROP, "Fastfile for zone '%s' has an invalid asset list.", g_load.filename);
+        return;
+    }
+    g_varXAssetList = {};
+    g_varXAssetList.stringList.count = static_cast<int>(header.scriptStringCount);
+    g_varXAssetList.assetCount = static_cast<int>(header.assetCount);
+    // These fields are presence markers until the array loaders replace them.
+    g_varXAssetList.stringList.strings = reinterpret_cast<const char**>(static_cast<uintptr_t>(header.scriptStringsTag));
+    g_varXAssetList.assets = reinterpret_cast<XAsset*>(static_cast<uintptr_t>(header.assetsTag));
     DB_PushStreamPos(4u);
     varScriptStringList = &varXAssetList->stringList;
     Load_ScriptStringList(0);
