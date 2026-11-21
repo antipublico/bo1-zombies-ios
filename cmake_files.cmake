@@ -617,6 +617,8 @@ set(SRC_DATABASE
 	"${SRC_DIR}/database/db_assetnames.h"
 	"${SRC_DIR}/database/db_auth.cpp"
 	"${SRC_DIR}/database/db_auth.h"
+	"${SRC_DIR}/database/db_fastfile_format.cpp"
+	"${SRC_DIR}/database/db_fastfile_format.h"
 	"${SRC_DIR}/database/db_file_load.cpp"
 	"${SRC_DIR}/database/db_file_load.h"
 	"${SRC_DIR}/database/db_load.cpp"

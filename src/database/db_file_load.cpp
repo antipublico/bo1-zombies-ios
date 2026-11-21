@@ -370,7 +370,8 @@ void __cdecl DB_LoadXFileInternal()
     XFile file; // [esp+14h] [ebp-38h] BYREF
     int fileSize; // [esp+38h] [ebp-14h]
     const char *failureReason; // [esp+3Ch] [ebp-10h]
-    char magic[8]; // [esp+40h] [ebp-Ch] BYREF
+    bo1::fastfile::FileHeader header{};
+    unsigned char serializedXFile[bo1::fastfile::XFileHeaderSize];
 
     g_totalWait = 0;
     if ( !g_load.f
@@ -383,38 +384,21 @@ void __cdecl DB_LoadXFileInternal()
         Com_Error(ERR_DROP, "Fastfile for zone '%s' is empty.", g_load.filename);
     DB_WaitXFileStage();
     DB_ReadXFileStage();
-    if ( g_load.stream.avail_in < 8
-        && !Assert_MyHandler(
-                    "C:\\projects_pc\\cod\\codsrc\\src\\database\\db_file_load.cpp",
-                    1768,
-                    0,
-                    "%s",
-                    "sizeof( magic ) <= g_load.stream.avail_in") )
+    const auto headerResult = bo1::fastfile::ParseFileHeader(
+        g_load.stream.next_in, g_load.stream.avail_in, header);
+    if (headerResult == bo1::fastfile::ParseResult::Truncated)
     {
-        __debugbreak();
+        Com_Error(ERR_DROP, "Fastfile for zone '%s' has a truncated header.", g_load.filename);
+        return;
     }
-    *(unsigned int *)magic = *(unsigned int *)g_load.stream.next_in;
-    *(unsigned int *)&magic[4] = *((unsigned int *)g_load.stream.next_in + 1);
-    g_load.stream.next_in += 8;
-    g_load.stream.avail_in -= 8;
-    if ( memcmp(magic, "IWff0100", 8u) && memcmp(magic, "IWffu100", 8u) )
+    if (headerResult == bo1::fastfile::ParseResult::InvalidMagic)
     {
-        //BLOPS_NULLSUB();
         Com_Error(ERR_DROP, "Fastfile for zone '%s' is corrupt or unreadable.", g_load.filename);
+        return;
     }
-    if ( g_load.stream.avail_in < 4
-        && !Assert_MyHandler(
-                    "C:\\projects_pc\\cod\\codsrc\\src\\database\\db_file_load.cpp",
-                    1787,
-                    0,
-                    "%s",
-                    "sizeof( version ) <= g_load.stream.avail_in") )
-    {
-        __debugbreak();
-    }
-    version = *(unsigned int *)g_load.stream.next_in;
-    g_load.stream.next_in += 4;
-    g_load.stream.avail_in -= 4;
+    version = header.version;
+    g_load.stream.next_in += bo1::fastfile::FileHeaderSize;
+    g_load.stream.avail_in -= static_cast<unsigned int>(bo1::fastfile::FileHeaderSize);
     if ( version != 473 )
     {
         if ( version >= 0x1D9 )
@@ -432,7 +416,7 @@ void __cdecl DB_LoadXFileInternal()
                 version,
                 473);
     }
-    fileIsSecure = memcmp(magic, "IWffu100", 8u) != 0;
+    fileIsSecure = header.authenticated;
     err = DB_AuthLoad_InflateInit(&g_load.stream, fileIsSecure);
     failureReason = 0;
     if ( fileIsSecure )
@@ -455,8 +439,9 @@ void __cdecl DB_LoadXFileInternal()
     {
         __debugbreak();
     }
-    DB_LoadXFileSetSize(36);
-    DB_LoadXFileData((unsigned __int8 *)&file, 36);
+    DB_LoadXFileSetSize(sizeof(serializedXFile));
+    DB_LoadXFileData(serializedXFile, sizeof(serializedXFile));
+    bo1::fastfile::ParseXFileHeader(serializedXFile, sizeof(serializedXFile), file);
     DB_LoadXFileSetSize(file.size);
     if ( g_trackLoadProgress )
     {

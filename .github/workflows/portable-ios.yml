@@ -1,0 +1,40 @@
+name: Portable components and iOS libraries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-and-ios:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build host components
+        run: |
+          cmake -S . -B build/host -DBO1_PORTABLE_TOOLS=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/host --parallel 3
+          ctest --test-dir build/host --output-on-failure
+      - name: Build iOS ARM64 libraries
+        run: |
+          cmake -S . -B build/ios \
+            -DBO1_PORTABLE_TOOLS=ON \
+            -DBO1_BUILD_FASTFILE_INSPECTOR=OFF \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/ios --parallel 3
+          xcrun lipo -info build/ios/libbo1_fastfile_format.a
+          xcrun lipo -info build/ios/libbo1_narrow32.a
+          xcrun lipo -info build/ios/libbo1_steam_offline.a
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bo1-ios-arm64-libraries
+          path: build/ios/libbo1_*.a
+          if-no-files-found: error

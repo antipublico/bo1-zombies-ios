@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <zlib/zlib.h>
 #include "db_registry.h"
+#include "db_fastfile_format.h"
 
 struct DB_LoadData // sizeof=0x807C
 {                                       // XREF: .data:g_load/r
@@ -44,13 +45,7 @@ struct DB_LoadData // sizeof=0x807C
                                         // DB_LoadXFileData(uchar *,int)+C3/r ...
 };
 
-struct XFile // sizeof=0x24
-{                                       // XREF: ?DB_LoadXFileInternal@@YAXXZ/r
-    unsigned int size;                  // XREF: DB_LoadXFileInternal(void)+28B/r
-    unsigned int externalSize;          // XREF: DB_LoadXFileInternal(void)+2B4/r
-                                        // DB_LoadXFileInternal(void)+2EF/r
-    unsigned int blockSize[7];          // XREF: DB_LoadXFileInternal(void)+348/o
-};
+using XFile = bo1::fastfile::XFileHeader;
 
 double __cdecl DB_GetLoadedFraction();
 bool __cdecl DB_FinishedLoadingAssets();

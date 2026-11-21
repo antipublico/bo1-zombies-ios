@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
 project(BO1Zombies)
 
+option(BO1_PORTABLE_TOOLS "Build portable fastfile tools and checks" OFF)
+option(BO1_WITH_STEAM "Link the Steam client SDK" ON)
+if (BO1_PORTABLE_TOOLS)
+    include(cmake/portable.cmake)
+    return()
+endif()
+
 set(BIN_NAME "BO1Zombies")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -72,8 +79,14 @@ if (MSVC AND WIN32 AND NOT MSVC_VERSION VERSION_LESS 142)
 endif()
 
 # ----- Links -----
+if (BO1_WITH_STEAM)
+    target_link_libraries(BO1Zombies PUBLIC steam_api.lib)
+else()
+    target_compile_definitions(BO1Zombies PUBLIC STEAM_API_NODLL)
+    target_sources(BO1Zombies PRIVATE src/platform/steam_offline.cpp)
+endif()
+
 target_link_libraries(BO1Zombies PUBLIC
-    steam_api.lib
     binkw32.lib
     nvapi.lib
     d3d9.lib
