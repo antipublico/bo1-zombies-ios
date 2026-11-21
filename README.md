@@ -53,14 +53,15 @@ exhaustion. Integration into the engine's VM and expanded asset loader is pendin
 The table retains up to 255 distinct 16 MB address regions for the process lifetime.
 
 The manually triggered workflow in `.github/workflows/portable-ios.yml` runs
-host tests and builds all three iOS libraries on a macOS runner. The
-[first iOS validation run](https://github.com/antipublico/bo1-zombies-ios/actions/runs/44935688430)
-passed on 2026-11-21 at commit `77983dd`. All four host tests passed, and Apple
-Clang compiled the decoder, memory and offline-service libraries with the
-`iphoneos` SDK for ARM64 and an iOS 15.0 deployment target. The run provides
-the `bo1-ios-arm64-libraries` artifact with three static libraries. This validates
-these components; full-engine integration, app linking, packaging and iPhone
-execution remain pending.
+host tests and builds the iOS development app on a macOS runner. The
+[app validation run](https://github.com/antipublico/bo1-zombies-ios/actions/runs/44937239981)
+passed on 2026-11-21 at commit `86c98f1`. All six host tests passed with AddressSanitizer
+and UndefinedBehaviorSanitizer on the C++ components. Xcode built and linked the
+ARM64 device executable with an iOS 15.0 deployment target, then the app passed
+its native component and synthetic-fastfile checks in an iPhone 16e simulator
+running iOS 26.2. The startup screenshot was inspected. The run provides six
+static libraries, an unsigned development IPA, and simulator logs/screenshots.
+Full-engine integration and execution on the physical iPhone SE remain pending.
 
 The VM and compiler now share explicit little-endian scalar operand reads and
 writes. `Scr_ReadUnsigned` consumes four bytes on both x86 and ARM64, and packed
