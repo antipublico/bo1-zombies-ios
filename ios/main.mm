@@ -3,9 +3,11 @@
 
 #include <database/db_fastfile_format.h>
 #include <database/fastfile_inspection.h>
+#include <database/fastfile_assets.h>
 #include <clientscript/cscr_bytecode.h>
 #include <steam/steam_api.h>
 #include <universal/narrow32.h>
+#include "../tests/native_asset_fixture.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +16,7 @@
 #include <string>
 
 static bool runSelfTest = false;
+static bool showFixturePreview = false;
 
 static bool CheckNativeComponents(std::string& error)
 {
@@ -110,13 +113,14 @@ static bool CheckSyntheticFastfile(std::string& error)
 
 static NSString* InspectionTextForPath(const char* path, BOOL* success)
 {
-    bo1::fastfile::Inspection inspection{};
-    bo1::fastfile::InspectionLimits limits{};
-    limits.maxFileBytes = 512ull * 1024 * 1024;
-    limits.maxExpandedBytes = 512ull * 1024 * 1024;
-    limits.maxMetadataBytes = 8 * 1024 * 1024;
+    bo1::fastfile::AssetPrefix prefix{};
+    bo1::fastfile::AssetLoadLimits limits{};
+    limits.inspection.maxFileBytes = 512ull * 1024 * 1024;
+    limits.inspection.maxExpandedBytes = 512ull * 1024 * 1024;
+    limits.inspection.maxMetadataBytes = 8 * 1024 * 1024;
+    limits.maxNativeBytes = 32 * 1024 * 1024;
     std::string error;
-    const auto result = bo1::fastfile::InspectFile(path, inspection, error, limits);
+    const auto result = bo1::fastfile::LoadAssetPrefix(path, prefix, error, limits);
     *success = result == bo1::fastfile::InspectionResult::Ok;
     if (!*success)
     {
@@ -125,11 +129,12 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
             detail ?: @"Error de lectura desconocido."];
     }
 
+    const auto& inspection = prefix.inspection;
     size_t populatedStrings = 0;
     for (const auto& string : inspection.scriptStrings)
         populatedStrings += string.present;
     NSMutableString* text = [NSMutableString stringWithFormat:
-        @"Archivo validado\n\nVersión: %u\nRecursos: %zu\nCadenas presentes: %zu de %zu\n"
+        @"Estructura validada\n\nVersión: %u\nRecursos: %zu\nCadenas presentes: %zu de %zu\n"
          "Datos descomprimidos: %.2f MiB\nMetadatos leídos: %.2f KiB\n\nTipos de recursos\n",
         inspection.header.version, inspection.assets.size(), populatedStrings,
         inspection.scriptStrings.size(), inspection.expandedBytes / (1024.0 * 1024.0),
@@ -139,6 +144,40 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
         ++counts[asset.type];
     for (const auto& entry : counts)
         [text appendFormat:@"%s: %zu\n", bo1::fastfile::AssetTypeName(entry.first), entry.second];
+
+    size_t rawfiles = 0;
+    size_t tables = 0;
+    size_t cells = 0;
+    size_t localizations = 0;
+    size_t emptyRoots = 0;
+    for (const auto& entry : prefix.entries)
+    {
+        rawfiles += entry.rawfile != nullptr;
+        localizations += entry.localize != nullptr;
+        if (entry.stringTable != nullptr)
+        {
+            ++tables;
+            if (entry.stringTable->values != nullptr)
+                cells += static_cast<size_t>(entry.stringTable->rowCount) *
+                    static_cast<size_t>(entry.stringTable->columnCount);
+        }
+        emptyRoots += entry.rawfile == nullptr && entry.stringTable == nullptr && entry.localize == nullptr;
+    }
+    [text appendFormat:@"\nRecursos reconstruidos\nArchivos: %zu\nTablas: %zu\nCeldas: %zu\n"
+        "Entradas localizadas: %zu\nReferencias vacías: %zu\nProcesados: %zu de %zu\nMemoria contabilizada: %.2f KiB\n",
+        rawfiles, tables, cells, localizations, emptyRoots, prefix.entries.size(),
+        inspection.assets.size(), prefix.nativeBytes / 1024.0];
+    if (prefix.stop == bo1::fastfile::AssetStop::Complete)
+        [text appendString:@"\nReconstrucción del directorio completada.\n"];
+    else
+    {
+        const char* type = prefix.nextAsset < inspection.assets.size()
+            ? bo1::fastfile::AssetTypeName(inspection.assets[prefix.nextAsset].type) : "desconocido";
+        NSString* reason = prefix.stop == bo1::fastfile::AssetStop::UnsupportedType
+            ? @"tipo aún no soportado" : @"referencia aún no resuelta";
+        [text appendFormat:@"\nReconstrucción parcial. Detenida en índice %zu (base 0), %s: %@.\n"
+            "Los recursos siguientes todavía no se reconstruyeron.\n", prefix.nextAsset, type, reason];
+    }
     [text appendString:@"\nEl contenido todavía no está integrado en una partida."];
     return text;
 }
@@ -218,6 +257,20 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
         [content.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-16]
     ]];
     [self.resultView setContentHuggingPriority:UILayoutPriorityDefaultLow - 1 forAxis:UILayoutConstraintAxisVertical];
+    if (showFixturePreview)
+    {
+        // CI-only launch flag: display the synthetic native assets to inspect
+        // the results UI without shipping or uploading any game content.
+        NSString* path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"bo1-preview-%@.ff", NSUUID.UUID.UUIDString]];
+        const auto bytes = bo1::tests::NativeAssetFixture();
+        NSData* fixture = [NSData dataWithBytes:bytes.data() length:bytes.size()];
+        BOOL success = NO;
+        if ([fixture writeToFile:path atomically:YES])
+            self.resultView.text = InspectionTextForPath(path.fileSystemRepresentation, &success);
+        [NSFileManager.defaultManager removeItemAtPath:path error:nullptr];
+        self.stateLabel.text = success ? @"Prueba con datos sintéticos completada." : @"Falló la prueba sintética.";
+    }
 }
 
 - (void)selectFastfile:(id)sender
@@ -294,7 +347,10 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     {
         dispatch_async(dispatch_get_main_queue(), ^{
             std::string error;
-            const bool passed = CheckNativeComponents(error) && CheckSyntheticFastfile(error);
+            NSString* filename = [NSString stringWithFormat:@"bo1-native-test-%@.ff", NSUUID.UUID.UUIDString];
+            NSString* path = [NSTemporaryDirectory() stringByAppendingPathComponent:filename];
+            const bool passed = CheckNativeComponents(error) && CheckSyntheticFastfile(error) &&
+                bo1::tests::CheckNativeAssetFixture(path.fileSystemRepresentation, error);
             if (passed)
                 std::puts("BO1_IOS_SELF_TEST_PASS");
             else
@@ -322,7 +378,10 @@ int main(int argc, char* argv[])
     @autoreleasepool
     {
         for (int index = 1; index < argc; ++index)
+        {
             runSelfTest = runSelfTest || std::strcmp(argv[index], "--self-test") == 0;
+            showFixturePreview = showFixturePreview || std::strcmp(argv[index], "--fixture-preview") == 0;
+        }
         return UIApplicationMain(argc, argv, nil, NSStringFromClass(BO1AppDelegate.class));
     }
 }

@@ -4,7 +4,7 @@ endif()
 
 enable_language(OBJCXX)
 
-add_executable(bo1_ios MACOSX_BUNDLE ios/main.mm)
+add_executable(bo1_ios MACOSX_BUNDLE ios/main.mm tests/native_asset_fixture.cpp)
 target_compile_features(bo1_ios PRIVATE cxx_std_17)
 target_compile_options(bo1_ios PRIVATE -fobjc-arc)
 target_link_libraries(bo1_ios PRIVATE

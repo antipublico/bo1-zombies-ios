@@ -28,7 +28,8 @@ add_library(bo1_inspect_zlib STATIC
     src/zlib/zutil.c
 )
 target_include_directories(bo1_inspect_zlib PUBLIC "${PROJECT_SOURCE_DIR}/src/zlib")
-add_library(bo1_fastfile_inspection STATIC src/database/fastfile_inspection.cpp)
+add_library(bo1_fastfile_inspection STATIC
+    src/database/fastfile_inspection.cpp src/database/fastfile_assets.cpp)
 target_compile_features(bo1_fastfile_inspection PUBLIC cxx_std_17)
 target_link_libraries(bo1_fastfile_inspection PUBLIC bo1_fastfile_format PRIVATE bo1_inspect_zlib)
 
@@ -58,6 +59,10 @@ if (BUILD_TESTING)
     add_executable(bo1_fastfile_inspection_tests tests/fastfile_inspection_tests.cpp)
     target_link_libraries(bo1_fastfile_inspection_tests PRIVATE bo1_fastfile_inspection)
     add_test(NAME fastfile_inspection COMMAND bo1_fastfile_inspection_tests)
+
+    add_executable(bo1_fastfile_assets_tests tests/fastfile_assets_tests.cpp tests/native_asset_fixture.cpp)
+    target_link_libraries(bo1_fastfile_assets_tests PRIVATE bo1_fastfile_inspection)
+    add_test(NAME fastfile_assets COMMAND bo1_fastfile_assets_tests)
 
     if (BO1_BUILD_FASTFILE_INSPECTOR)
         find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)

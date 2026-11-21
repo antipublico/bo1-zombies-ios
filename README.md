@@ -26,8 +26,9 @@ Run `bo1_fastfile_inspect <path-to-zone.ff>` from the build output directory.
 It reads the package header and checks the complete compressed stream using the
 engine's bundled zlib. Authenticated packages follow the existing loader's
 unsupported path. The output reports declared sizes and actual decompressed
-bytes, decoded string counts and asset types. It does not reconstruct assets or
-establish that a map is playable. Offset strings must reference an already
+bytes, decoded string counts and asset types. Add `--load-assets` before the path
+to reconstruct the supported consecutive asset roots into native engine types.
+This does not establish that a map is playable. Offset strings must reference an already
 decoded string in block 4. The API rejects unsupported references explicitly.
 
 For an iOS library build with an available Apple SDK, select the iOS toolchain
@@ -37,7 +38,25 @@ the portable libraries, including the reusable inspection API and bytecode reade
 All 101 FastFiles in the supplied PC installation passed envelope, decompression,
 declared-length, script-string and asset-directory checks. Kino's zone reports
 908 assets and 789 script-string slots (788 present and one null). Its metadata
-consumes 24,399 decompressed bytes. Loading those assets into the game remains pending.
+consumes 24,399 decompressed bytes. Engine registration of reconstructed assets remains pending.
+
+`LoadAssetPrefix` now reconstructs RawFile, StringTable and LocalizeEntry objects
+using shared engine structure definitions for 32-bit and 64-bit ABIs. Owned
+storage keeps pointers valid across copies and moves of the result. It resolves
+prior block-4 string references, directory-root aliases and `-2` inserted alias
+slots. It stops at the first unsupported root without skipping its body, and
+validates the entire compressed stream before publishing the result. Block-0
+temporary headers, block-4 alignment and sequential file offsets stay separate.
+No scripts are executed and no global engine registry is modified.
+
+The native loader completed all roots in 12 of the 101 local packages and loaded
+nonempty prefixes from another 27. Across those packages it reconstructed 311
+rawfiles, 10 tables with 12,522 cells, and 19,171 localized entries (counts include
+entries repeated across packages). The remaining packages stopped before an
+unsupported first root. All 101 complete compressed streams passed validation.
+Kino's first table has 773 rows and two columns; loading stops before root 1,
+a technique set. Native types still to implement include shaders, materials,
+images, models, animation, collision and sound.
 
 Configure the desktop engine with `-DBO1_WITH_STEAM=OFF` to link the static
 unavailable-service backend. It activates the engine's existing offline paths.
@@ -73,12 +92,17 @@ remain pending; this is not yet a working 64-bit VM.
 The `BO1_BUILD_IOS_APP` target is a UIKit development app that links the native
 components and inspects a user-selected `.ff` file. It does not launch gameplay.
 The file stays at the selected location and is read using scoped access. The
-default limits are 512 MiB of input and decompressed data and 8 MiB of retained
-metadata (excluding allocator overhead). No game data is bundled or uploaded.
+default limits are 512 MiB of input and decompressed data, 8 MiB of accounted
+metadata, and 32 MiB of accounted native payload/bookkeeping. Allocator overhead
+and container spare capacity are excluded; these are not process RSS limits.
+No game data is bundled or uploaded.
 
 The workflow also builds the device app, packages `BO1Zombies-unsigned.ipa`, and
-runs `--self-test` in an iPhone simulator using a synthetic fastfile. It captures
-a startup screenshot and publishes simulator logs as separate artifacts. The
+runs `--self-test` in an iPhone simulator using synthetic metadata and native
+asset fixtures. It checks pointer ownership, alias identity and all three native
+types. It captures startup and synthetic-result screenshots and publishes
+simulator logs as separate artifacts. The external document picker and its
+security-scoped access still require device or UI testing. The
 IPA must be signed before device installation; simulator success does not prove
 execution on an actual iPhone. Local Mac build commands follow the
 [CMake iOS toolchain configuration](https://cmake.org/cmake/help/latest/manual/cmake-toolchains.7.html#cross-compiling-for-ios-tvos-visionos-or-watchos):

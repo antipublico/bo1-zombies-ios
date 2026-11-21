@@ -1,4 +1,5 @@
 #pragma once
+#include "localize_entry.h"
 
 #include <universal/dvar.h>
 
@@ -7,12 +8,6 @@ enum msgLocErrType_t : __int32
                                         // SEH_GetLocalizedTokenReference/r
     LOCMSG_SAFE  = 0x0,
     LOCMSG_NOERR = 0x1,
-};
-
-struct LocalizeEntry // sizeof=0x8
-{                                       // XREF: XAssetPoolEntry<LocalizeEntry>/r
-    const char *value;
-    const char *name;
 };
 
 template <typename T>

@@ -1,22 +1,30 @@
 #include <database/fastfile_inspection.h>
+#include <database/fastfile_assets.h>
 #include <inttypes.h>
 #include <cstdio>
+#include <cstring>
 
 int main(int argc, char** argv)
 {
     using namespace bo1::fastfile;
-    if (argc != 2)
+    const bool loadAssets = argc == 3 && std::strcmp(argv[1], "--load-assets") == 0;
+    if (argc != 2 && !loadAssets)
     {
-        std::fprintf(stderr, "Usage: bo1_fastfile_inspect <zone.ff>\n");
+        std::fprintf(stderr, "Usage: bo1_fastfile_inspect [--load-assets] <zone.ff>\n");
         return 2;
     }
     Inspection inspection;
+    AssetPrefix native;
     std::string error;
-    if (InspectFile(argv[1], inspection, error) != InspectionResult::Ok)
+    const auto result = loadAssets ? LoadAssetPrefix(argv[2], native, error)
+                                   : InspectFile(argv[1], inspection, error);
+    if (result != InspectionResult::Ok)
     {
         std::fprintf(stderr, "%s\n", error.c_str());
         return 1;
     }
+    if (loadAssets)
+        inspection = std::move(native.inspection);
     std::printf("Version %" PRIu32 "\n", inspection.header.version);
     std::printf("Declared payload bytes %" PRIu32 "\n", inspection.file.size);
     std::printf("External bytes %" PRIu32 "\n", inspection.file.externalSize);
@@ -36,6 +44,29 @@ int main(int argc, char** argv)
             std::printf("Asset type %" PRIu32 " %s count %zu\n", type, AssetTypeName(type), counts[type]);
     for (size_t index = 0; index < 7; ++index)
         std::printf("Block %zu bytes %" PRIu32 "\n", index, inspection.file.blockSize[index]);
-    std::printf("Envelope, compressed stream and metadata verified. Asset reconstruction remains pending.\n");
+    if (loadAssets)
+    {
+        size_t raw = 0, tables = 0, cells = 0, localized = 0, aliases = 0;
+        for (const auto& asset : native.entries)
+        {
+            raw += asset.rawfile != nullptr;
+            tables += asset.stringTable != nullptr;
+            localized += asset.localize != nullptr;
+            aliases += asset.alias;
+            if (asset.stringTable)
+                cells += size_t(asset.stringTable->rowCount) * size_t(asset.stringTable->columnCount);
+        }
+        std::printf("Native roots %zu of %zu\n", native.entries.size(), inspection.assets.size());
+        std::printf("Native rawfiles %zu tables %zu cells %zu localized %zu aliases %zu\n", raw, tables, cells, localized, aliases);
+        std::printf("Native accounted bytes %" PRIu64 "\n", native.nativeBytes);
+        std::printf("Asset body bytes %" PRIu64 "\n", native.decodedAssetBytes);
+        if (native.stop == AssetStop::Complete)
+            std::printf("Native prefix complete. Engine registration and gameplay remain pending.\n");
+        else
+            std::printf("Native prefix stopped at index %zu type %" PRIu32 " (%s), reason %s.\n", native.nextAsset,
+                inspection.assets[native.nextAsset].type, AssetTypeName(inspection.assets[native.nextAsset].type),
+                native.stop == AssetStop::UnsupportedType ? "unsupported type" : "unsupported root reference");
+    }
+    std::printf("Envelope, compressed stream and metadata verified.\n");
     return 0;
 }

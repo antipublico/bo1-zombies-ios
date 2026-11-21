@@ -68,6 +68,9 @@ def main():
         simctl("launch", device_id, bundle_id)
         time.sleep(3)
         simctl("io", device_id, "screenshot", str(args.output / "startup.png"))
+        simctl("launch", "--terminate-running-process", device_id, bundle_id, "--fixture-preview")
+        time.sleep(3)
+        simctl("io", device_id, "screenshot", str(args.output / "native-assets.png"))
         print("iOS simulator self-test passed; startup screenshot saved.", flush=True)
     finally:
         simctl("shutdown", device_id, check=False)

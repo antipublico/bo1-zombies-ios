@@ -1,0 +1,160 @@
+#include "native_asset_fixture.h"
+#include <database/fastfile_assets.h>
+#include <platform/bo1_bytecode_io.h>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+
+namespace
+{
+using Bytes = std::vector<unsigned char>;
+unsigned checks = 0, failures = 0;
+void Check(bool condition, const char* name)
+{
+    ++checks;
+    if (!condition) { ++failures; std::fprintf(stderr, "FAIL: %s\n", name); }
+}
+void Put32(Bytes& bytes, size_t offset, uint32_t value)
+{
+    bo1::bytecode::Store<uint32_t>(bytes.data() + offset, value);
+}
+Bytes Pack(const Bytes& payload)
+{
+    Bytes file = {'I','W','f','f','u','1','0','0',0xd9,1,0,0,0x78,1,1};
+    const auto size = static_cast<uint16_t>(payload.size());
+    file.push_back(size & 255); file.push_back(size >> 8);
+    file.push_back((~size) & 255); file.push_back(((~size) >> 8) & 255);
+    file.insert(file.end(), payload.begin(), payload.end());
+    uint32_t a = 1, b = 0;
+    for (auto byte : payload) { a = (a + byte) % 65521; b = (b + a) % 65521; }
+    const uint32_t checksum = (b << 16) | a;
+    for (int shift = 24; shift >= 0; shift -= 8) file.push_back(checksum >> shift);
+    return file;
+}
+}
+
+int main()
+{
+    using namespace bo1::fastfile;
+    const auto path = std::filesystem::temp_directory_path() /
+        ("bo1-native-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".ff");
+    struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code ec; std::filesystem::remove(path, ec); } } cleanup{path};
+    std::string error;
+    const bool fixtureValid = bo1::tests::CheckNativeAssetFixture(path.string().c_str(), error);
+    Check(fixtureValid, error.c_str());
+    Check(!std::filesystem::exists(path), "shared native self-test removes temporary file");
+    const Bytes fixture = bo1::tests::NativeAssetFixture();
+    const Bytes pristine(fixture.begin() + 19, fixture.end() - 4);
+    Check(pristine.size() == 221, "fixture size");
+
+    auto write = [&](const Bytes& file) {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output.write(reinterpret_cast<const char*>(file.data()), file.size());
+        Check(bool(output), "write fixture");
+    };
+    AssetPrefix result;
+    auto load = [&](Bytes payload, InspectionResult expected, AssetLoadLimits limits = {}) {
+        write(Pack(payload));
+        result.entries.push_back({}); // Failure must clear previous visible state.
+        const auto actual = LoadAssetPrefix(path.string().c_str(), result, error, limits);
+        Check(actual == expected, error.empty() ? "unexpected loader status" : error.c_str());
+        if (expected != InspectionResult::Ok)
+            Check(result.entries.empty() && result.inspection.assets.empty()
+                && result.nativeBytes == 0 && !error.empty(), "failure publishes no partial native state");
+    };
+    auto mutate = [&](size_t offset, uint32_t value, InspectionResult expected) {
+        auto payload = pristine;
+        Put32(payload, offset, value);
+        load(payload, expected);
+    };
+
+    mutate(8, 20, InspectionResult::Ok); // Block 0 rewinds: never sum all roots.
+    Check(result.entries.size() == 4, "TEMP stream resets per root");
+    mutate(8, 19, InspectionResult::InvalidFormat);
+    mutate(24, 135, InspectionResult::InvalidFormat);
+    mutate(88, UINT32_MAX, InspectionResult::InvalidFormat);
+    mutate(88, INT32_MAX, InspectionResult::InvalidFormat);
+    mutate(124, UINT32_MAX, InspectionResult::InvalidFormat);
+    mutate(128, INT32_MAX, InspectionResult::InvalidFormat);
+    mutate(132, 0, InspectionResult::InvalidFormat);
+    mutate(84, 0x80000022, InspectionResult::UnsupportedReference);
+    mutate(150, 0x8000006f, InspectionResult::UnsupportedReference); // Future gamma.
+    mutate(158, 0x80000022, InspectionResult::UnsupportedReference); // Interior of raw name.
+    mutate(158, 0x60000021, InspectionResult::UnsupportedReference);
+
+    auto payload = pristine;
+    bo1::bytecode::Store<int16_t>(payload.data() + 195, -1);
+    load(payload, InspectionResult::InvalidFormat);
+    payload = pristine;
+    bo1::bytecode::Store<int16_t>(payload.data() + 195, 4);
+    load(payload, InspectionResult::InvalidFormat);
+    payload = pristine;
+    bo1::bytecode::Store<int16_t>(payload.data() + 195, 2);
+    load(payload, InspectionResult::Ok); // Preserve disk order, as the engine loader does.
+
+    mutate(52, 7, InspectionResult::Ok);
+    Check(result.stop == AssetStop::UnsupportedType && result.nextAsset == 0
+        && result.decodedAssetBytes == 0, "unsupported first body is never consumed");
+    mutate(60, 7, InspectionResult::Ok);
+    Check(result.stop == AssetStop::UnsupportedType && result.nextAsset == 1
+        && result.decodedAssetBytes == 36 && result.entries[0].rawfile,
+        "supported prefix survives unknown second type");
+    mutate(80, 0x60000001, InspectionResult::Ok);
+    Check(result.stop == AssetStop::UnsupportedRootReference && result.nextAsset == 3,
+        "unsupported root reference stops before dereference");
+    payload = pristine;
+    Put32(payload, 76, 37);
+    Put32(payload, 80, 0x80000039);
+    load(payload, InspectionResult::Ok);
+    Check(result.entries.size() == 4 && result.entries[3].alias
+        && result.entries[3].stringTable == result.entries[1].stringTable,
+        "inserted -2 alias slot resolves to the same object");
+    mutate(76, 37, InspectionResult::Ok);
+    Check(result.stop == AssetStop::UnsupportedRootReference && result.nextAsset == 3,
+        "root reference cannot change asset type");
+
+    payload = pristine;
+    payload[119] = 'X'; // Preserve raw len+1 bytes without imposing a NUL policy.
+    load(payload, InspectionResult::Ok);
+    Check(result.entries.size() == 4 && result.entries[0].rawfile->buffer[7] == 'X',
+        "raw payload consumes len+1 bytes verbatim");
+    AssetLoadLimits limits;
+    limits.maxNativeBytes = 0;
+    load(pristine, InspectionResult::LimitExceeded, limits);
+
+    // Two native strings referencing the same metadata string must share the
+    // same retained address, even after the metadata result itself is copied.
+    payload.assign(77, 0);
+    Put32(payload, 0, 41); Put32(payload, 8, 8); Put32(payload, 24, 32);
+    Put32(payload, 36, 1); Put32(payload, 40, UINT32_MAX);
+    Put32(payload, 44, 1); Put32(payload, 48, UINT32_MAX);
+    Put32(payload, 52, UINT32_MAX);
+    std::memcpy(payload.data() + 56, "seed", 5);
+    Put32(payload, 61, 23); Put32(payload, 65, UINT32_MAX);
+    Put32(payload, 69, 0x80000005); Put32(payload, 73, 0x80000005);
+    load(payload, InspectionResult::Ok);
+    Check(result.entries.size() == 1 && result.entries[0].localize
+        && result.entries[0].localize->name == result.entries[0].localize->value
+        && std::strcmp(result.entries[0].localize->name, "seed") == 0,
+        "metadata string aliases preserve pointer identity");
+
+    payload = pristine;
+    Put32(payload, 52, 7);
+    payload.resize(60000, 0);
+    Put32(payload, 0, payload.size() - 36);
+    auto damaged = Pack(payload);
+    damaged.back() ^= 1;
+    write(damaged);
+    Check(LoadAssetPrefix(path.string().c_str(), result, error) == InspectionResult::CorruptStream
+        && result.entries.empty() && result.inspection.assets.empty(),
+        "late checksum failure invalidates even an otherwise supported prefix");
+
+    payload = pristine;
+    payload.push_back(0);
+    Put32(payload, 0, payload.size() - 36);
+    load(payload, InspectionResult::InvalidFormat);
+    std::printf("%u native asset checks, %u failures\n", checks, failures);
+    return failures != 0;
+}

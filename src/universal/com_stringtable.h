@@ -1,20 +1,5 @@
 #pragma once
-
-struct StringTableCell // sizeof=0x8
-{
-    const char *string;
-    int hash;
-};
-
-struct StringTable // sizeof=0x14
-{                                       // XREF: XAssetPoolEntry<StringTable>/r
-    const char *name;
-    int columnCount;
-    int rowCount;
-    StringTableCell *values;
-    __int16 *cellIndex;
-};
-static_assert(sizeof(StringTable) == 20);
+#include "com_stringtable_types.h"
 
 union XAssetHeader;
 

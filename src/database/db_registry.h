@@ -2,6 +2,7 @@
 #include <win32/win_common.h>
 #include <cstddef>
 #include "database.h"
+#include "db_rawfile_types.h"
 #include <bgame/bg_emblems.h>
 #include <gfx_d3d/r_material.h>
 #include <xanim/xmodel.h>
@@ -20,13 +21,6 @@ enum DBCloneMethod : __int32
     DB_CLONE_NORMAL       = 0x0,
     DB_CLONE_FROM_DEFAULT = 0x1,
     DB_CLONE_SWAP         = 0x2,
-};
-
-struct RawFile // sizeof=0xC
-{                                       // XREF: XAssetPoolEntry<RawFile>/r
-    const char *name;
-    int len;
-    const char *buffer;
 };
 
 struct XZoneInfoInternal // sizeof=0x44
