@@ -73,14 +73,19 @@ The table retains up to 255 distinct 16 MB address regions for the process lifet
 
 The manually triggered workflow in `.github/workflows/portable-ios.yml` runs
 host tests and builds the iOS development app on a macOS runner. The
-[app validation run](https://github.com/antipublico/bo1-zombies-ios/actions/runs/44937239981)
-passed on 2026-11-21 at commit `86c98f1`. All six host tests passed with AddressSanitizer
+[native asset validation run](https://github.com/antipublico/bo1-zombies-ios/actions/runs/44962622259)
+passed on 2026-11-21 at commit `f40fff5`. All seven host tests passed with AddressSanitizer
 and UndefinedBehaviorSanitizer on the C++ components. Xcode built and linked the
 ARM64 device executable with an iOS 15.0 deployment target, then the app passed
-its native component and synthetic-fastfile checks in an iPhone 16e simulator
-running iOS 26.2. The startup screenshot was inspected. The run provides six
+its native component, synthetic-fastfile and native asset reconstruction checks
+in an iPhone 16e simulator running iOS 26.2. Startup and synthetic-asset result
+screenshots were inspected. The run provides six
 static libraries, an unsigned development IPA, and simulator logs/screenshots.
-Full-engine integration and execution on the physical iPhone SE remain pending.
+The native asset suite includes 76 checks, including invalid dimensions, block
+bounds, pointer alias identity, lifetime after copies/moves, byte limits and a
+late stream-checksum failure. Shared runtime type layouts also compiled for
+Windows x86. Full-engine integration and execution on the physical iPhone SE
+remain pending.
 
 The VM and compiler now share explicit little-endian scalar operand reads and
 writes. `Scr_ReadUnsigned` consumes four bytes on both x86 and ARM64, and packed
