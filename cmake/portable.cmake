@@ -46,6 +46,10 @@ if (WIN32 AND BO1_BUILD_FASTFILE_INSPECTOR)
     target_compile_features(bo1_scene_packer_win PRIVATE cxx_std_17)
     target_link_libraries(bo1_scene_packer_win PRIVATE bo1_fastfile_inspection bo1_inspect_zlib
         comdlg32 user32 shell32 ole32)
+    # Windows MSVC defaults to the system codepage; the GUI source is UTF-8.
+    if(MSVC)
+        target_compile_options(bo1_scene_packer_win PRIVATE /utf-8)
+    endif()
 endif()
 
 include(CTest)
