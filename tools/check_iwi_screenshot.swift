@@ -75,16 +75,19 @@ func check(_ bitmap: NSBitmapImageRep, _ report: Report) throws -> [Observation]
         // scanlines and the normalized UIKit window coordinates in the report.
         let x = Int(floor(sample.u * Double(bitmap.pixelsWide)))
         let y = Int(floor(sample.v * Double(bitmap.pixelsHigh)))
-        guard let raw = bitmap.colorAt(x: x, y: y),
-              let color = raw.usingColorSpace(.sRGB) ?? raw.usingColorSpace(.genericRGB) else {
-            throw CheckFailure("Cannot read RGB color at sample \(index).")
+        // colorAt().usingColorSpace(.sRGB) may apply the headless runner's
+        // display/profile conversion (e.g. red 255,0,0 becomes 255,38,0),
+        // which is inappropriate for verifying exact PNG screenshot pixels.
+        // NSBitmapImageRep.getPixel returns the decoded 8-bit sample values
+        // without an additional NSColor/ICC/display conversion.
+        guard bitmap.bitsPerSample == 8,
+              bitmap.samplesPerPixel >= 3 && bitmap.samplesPerPixel <= 4 else {
+            throw CheckFailure("Unsupported PNG pixel sample layout.")
         }
-        let channels = [color.redComponent, color.greenComponent,
-                        color.blueComponent, color.alphaComponent]
-        guard channels.allSatisfy({ $0.isFinite }) else {
-            throw CheckFailure("Sample \(index) contains a non-finite color component.")
-        }
-        let actual = channels.map { Int((min(1, max(0, $0)) * 255).rounded()) }
+        var channels = [Int](repeating: 0, count: 4)
+        bitmap.getPixel(&channels, atX: x, y: y)
+        let actual = [channels[0], channels[1], channels[2],
+                      bitmap.samplesPerPixel == 4 ? channels[3] : 255]
         let passed = zip(actual, sample.rgba).allSatisfy { abs($0.0 - $0.1) <= 6 }
         observations.append(Observation(index: index, x: x, y: y,
                                         expected: sample.rgba, actual: actual, passed: passed))
