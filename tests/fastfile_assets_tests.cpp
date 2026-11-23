@@ -348,6 +348,7 @@ int main()
         materialName + sizeof(materialName));
     Put32(materialWithHeader, 0,
         static_cast<uint32_t>(materialWithHeader.size() - 36));
+    Put32(materialWithHeader, 8, 252 + 192); // Nested TEMP Material header.
     AssetLoadLimits deep;
     deep.previewFirstMaterialHeader = true;
     load(materialWithHeader, InspectionResult::Ok, deep);
