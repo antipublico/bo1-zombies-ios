@@ -4,6 +4,8 @@
 #include <database/db_fastfile_format.h>
 #include <database/fastfile_inspection.h>
 #include <database/fastfile_assets.h>
+#include <database/db_xmodel_header.h>
+#include <platform/bo1_bytecode_io.h>
 #include <clientscript/cscr_bytecode.h>
 #include <steam/steam_api.h>
 #include <universal/narrow32.h>
@@ -52,6 +54,34 @@ static bool CheckNativeComponents(std::string& error)
         header.version != 473 || header.authenticated)
     {
         error = "Fastfile header decoder failed";
+        return false;
+    }
+
+    // Validate the actual ARM64 device/simulator ABI against the packed
+    // 252-byte Win32 model header. Never cast tags into native pointers.
+    unsigned char modelDisk[bo1::fastfile::XModelDiskHeaderSize + 1]{};
+    auto* model = modelDisk + 1; // Deliberately unaligned.
+    model[4] = 4; // bones
+    model[5] = 1; // root bones
+    model[6] = 3; // surfaces
+    bo1::bytecode::Store<std::uint16_t>(model + 44, 3); // LOD0 surfaces
+    bo1::bytecode::Store<std::int16_t>(model + 216, 1); // active LODs
+    bo1::bytecode::Store<std::int16_t>(model + 218, -1); // no collision LOD
+    bo1::bytecode::Store<std::uint32_t>(model + 32, UINT32_MAX);
+    bo1::fastfile::XModelHeader modelHeader{};
+    if (!bo1::fastfile::DecodeXModelHeader(model, bo1::fastfile::XModelDiskHeaderSize, modelHeader)
+        || modelHeader.numBones != 4 || modelHeader.numSurfaces != 3
+        || modelHeader.lods[0].surfaceCount != 3 || modelHeader.surfacesTag != UINT32_MAX
+        || modelHeader.collisionLod != -1)
+    {
+        error = "Packed XModel header decoder failed on ARM64";
+        return false;
+    }
+    model[5] = 5; // Root bone count cannot exceed total bones.
+    if (bo1::fastfile::DecodeXModelHeader(model, bo1::fastfile::XModelDiskHeaderSize, modelHeader)
+        || modelHeader.numBones != 0)
+    {
+        error = "Invalid XModel header was accepted or partially published";
         return false;
     }
 
