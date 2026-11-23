@@ -602,6 +602,23 @@ private:
             if (!Charge(std::strlen(name) + 1)) return false;
             image.name.assign(name);
         }
+        if (image.textureTag == UINT32_MAX)
+        {
+            unsigned char loadDef[12]{};
+            if (!temp.Advance(sizeof(loadDef), 4))
+                return Fail("GfxImageLoadDef exceeds temporary block 0.");
+            if (!Read(loadDef, sizeof(loadDef))) return false;
+            image.loadDefLevels = loadDef[0];
+            image.loadDefFlags = loadDef[1];
+            image.loadDefFormat = bytecode::Load<int32_t>(loadDef + 4);
+            image.loadDefResourceSize = bytecode::Load<int32_t>(loadDef + 8);
+            if (image.loadDefResourceSize < 0)
+                return Fail("GfxImageLoadDef has negative texture payload size.");
+            image.inlineLoadDefHeader = true;
+            image.loadDefPending = image.loadDefResourceSize != 0;
+        }
+        else if (image.textureTag)
+            image.loadDefPending = true;
         if (!Charge(sizeof(XImageHeaderPreview))) return false;
         material.firstInlineImage = std::move(image);
         return true;

@@ -441,7 +441,13 @@ int main()
     Put32(withImage, imageOffset + 48, 0xCAFE1234u);
     const char imageName[] = "foliage_diffuse";
     withImage.insert(withImage.end(), imageName, imageName + sizeof(imageName));
-    Put32(withImage, 8, 252 + 192 + 52);
+    const size_t loadDefOffset = withImage.size();
+    withImage.insert(withImage.end(), 12, 0);
+    withImage[loadDefOffset] = 5; // mip levels.
+    withImage[loadDefOffset + 1] = 3; // flags.
+    bo1::bytecode::Store<int32_t>(withImage.data() + loadDefOffset + 4, 21);
+    bo1::bytecode::Store<int32_t>(withImage.data() + loadDefOffset + 8, 16384);
+    Put32(withImage, 8, 252 + 192 + 52 + 12);
     Put32(withImage, 0, static_cast<uint32_t>(withImage.size() - 36));
     AssetLoadLimits imageLimits = deep;
     imageLimits.previewFirstImageHeader = true;
@@ -460,8 +466,13 @@ int main()
         && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->baseSize == 8192
         && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadedSize == 4096
         && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->hash == 0xCAFE1234u
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->inlineLoadDefHeader
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefLevels == 5
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefFlags == 3
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefFormat == 21
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefResourceSize == 16384
         && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32
-            + 52 + sizeof(imageName),
+            + 52 + sizeof(imageName) + 12,
         "opt-in 52-byte image header and XString preserve original pixel tags");
     auto imageTruncated = withImage;
     imageTruncated.resize(imageOffset + 51);
@@ -471,15 +482,44 @@ int main()
         "truncated nested GfxImage header publishes no partial model");
     auto imageNoName = withImage;
     Put32(imageNoName, imageOffset + 44, 0);
-    imageNoName.resize(imageOffset + 52);
+    imageNoName.resize(imageOffset + 52 + 12);
+    const size_t noNameDef = imageOffset + 52;
+    imageNoName[noNameDef] = 1;
+    bo1::bytecode::Store<int32_t>(imageNoName.data() + noNameDef + 8, 0);
     Put32(imageNoName, 0, static_cast<uint32_t>(imageNoName.size() - 36));
     load(imageNoName, InspectionResult::Ok, imageLimits);
     Check(result.pendingXModelSkeleton
         && result.pendingXModelSkeleton->firstInlineMaterial
         && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
         && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->name.empty()
-        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32 + 52,
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32 + 52 + 12,
         "inline GfxImage with null name does not require a string payload");
+    auto truncatedLoadDef = withImage;
+    truncatedLoadDef.resize(loadDefOffset + 11);
+    Put32(truncatedLoadDef, 0,
+        static_cast<uint32_t>(truncatedLoadDef.size() - 36));
+    load(truncatedLoadDef, InspectionResult::InvalidFormat, imageLimits);
+    Check(!result.pendingXModelSkeleton,
+        "truncated GfxImageLoadDef header never publishes preview");
+    auto invalidLoadDef = withImage;
+    bo1::bytecode::Store<int32_t>(invalidLoadDef.data() + loadDefOffset + 8, -1);
+    load(invalidLoadDef, InspectionResult::InvalidFormat, imageLimits);
+    Check(!result.pendingXModelSkeleton,
+        "negative image resource size is rejected");
+    auto referencedLoadDef = withImage;
+    Put32(referencedLoadDef, imageOffset, 0x80000039u);
+    referencedLoadDef.resize(loadDefOffset);
+    Put32(referencedLoadDef, 0,
+        static_cast<uint32_t>(referencedLoadDef.size() - 36));
+    load(referencedLoadDef, InspectionResult::Ok, imageLimits);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
+        && !result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->inlineLoadDefHeader
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefPending
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32
+            + 52 + sizeof(imageName),
+        "referenced GfxImageLoadDef does not consume inline bytes");
     auto waterFirst = withImage;
     waterFirst[textureOffset + 7] = 11;
     Put32(waterFirst, 0, static_cast<uint32_t>(waterFirst.size() - 36));

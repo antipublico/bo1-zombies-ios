@@ -72,7 +72,15 @@ struct XImageHeaderPreview
     uint8_t levelCount = 0;
     uint8_t streaming = 0;
     bool delayLoadPixels = false;
-    bool skippedBecauseWater = false;
+    // GfxImageLoadDef starts with a 12-byte header. Only inspect that header
+    // for -1 inline load-def pointers; the resourceSize pixel bytes remain
+    // in the file and are not copied, decoded or uploaded.
+    bool inlineLoadDefHeader = false;
+    bool loadDefPending = false;
+    uint8_t loadDefLevels = 0;
+    uint8_t loadDefFlags = 0;
+    int32_t loadDefFormat = 0;
+    int32_t loadDefResourceSize = 0;
 };
 
 struct XMaterialHeaderPreview

@@ -167,6 +167,13 @@ int main(int argc, char** argv)
                         std::printf("First inline GfxImage tags texture 0x%08" PRIx32
                             " pixels 0x%08" PRIx32 " name 0x%08" PRIx32 "\n",
                             image.textureTag, image.pixelsTag, image.nameTag);
+                        if (image.inlineLoadDefHeader)
+                            std::printf("First inline GfxImageLoadDef levels %u flags 0x%02x format %" PRId32
+                                " resource bytes %" PRId32 " (pixel payload unread)\n",
+                                unsigned(image.loadDefLevels), unsigned(image.loadDefFlags),
+                                image.loadDefFormat, image.loadDefResourceSize);
+                        else if (image.loadDefPending)
+                            std::printf("First inline GfxImageLoadDef not embedded or not yet decoded.\n");
                     }
                     if (material.inlineWaterBeforeImage)
                         std::printf("First inline GfxImage skipped: inline water_t precedes the image.\n");
