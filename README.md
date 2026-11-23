@@ -340,3 +340,32 @@ A genuinely original map subsection requires extending the FF parser to
 GfxWorld/ComWorld and original placement/material references and validating
 those fields against assets available only in the user's local installation.
 No original game binaries are committed to this public repository.
+
+
+### Strict zombie/material matching and multi-texture scene test
+
+The Windows exporter now exposes a **BUSCAR ZOMBI + TEXTURA EXACTA
+(sin animación)** action. It only accepts an XModel whose decoded name
+resembles a zombie and whose first inline material explicitly contains a
+GfxImage name. That name must match an IWI filename exactly (normalized
+case, images/ prefix and .iwi suffix), **never by substring or model name**.
+Unmatched assets are rejected: grass_piece1.iwi can no longer be a
+zombie texture fallback. The alternative general scanner uses the same
+strict policy. Both modes can export up to six independently decoded
+models and up to six texture files where linked metadata is available.
+
+The versioned BO1SCN02 binary includes additional BC2 textures and a
+per-mesh texture index, and the iOS SceneKit renderer uses the assigned
+material for each mesh source; BO1SCN01 packs stay readable. CI now
+tests a synthetic two-model/two-texture file import, first-person button,
+and rejects fuzzy matches and invalid texture indices.
+
+**This does not yet make an animated zombie.** Zombies use skinned
+XModels/rigs and XAnim. The present LOD0 extractor excludes skinned
+surfaces, the current prefix reader stops at the first undecoded XModel,
+and only the *first* material/image reference can be inspected.
+XAnim directory entries may be counted but their payload, skeleton
+mapping and keyframes are not read or exported. The GUI reports those
+limits instead of producing fake animation. True 3D animated zombies
+require extending the loader to handle the complete XModel skeleton,
+surface skinning and XAnimParts data.
