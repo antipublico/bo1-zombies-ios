@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <SceneKit/SceneKit.h>
+#import "bo1_explore_view.h"
 
 #include <database/db_fastfile_format.h>
 #include <database/fastfile_inspection.h>
@@ -35,6 +36,7 @@ static bool showFixturePreview = false;
 static bool showIwiFixturePreview = false;
 static bool showModelFixturePreview = false;
 static bool showSceneFixturePreview = false;
+static bool showExploreFixturePreview = false;
 
 // Four large, uniform BC2 quadrants make screenshot sampling independent of
 // scaling/filtering at block boundaries. No original game pixels are used.
@@ -739,6 +741,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 @property(nonatomic, strong) UIImage* modelTexture;
 @property(nonatomic, strong) UIButton* togglePreviewButton;
 @property(nonatomic, strong) UIButton* toggleSceneButton;
+@property(nonatomic, strong) UIButton* exploreButton;
 @property(nonatomic, strong) UIButton* addModelButton;
 @property(nonatomic) BOOL showModel;
 @property(nonatomic) BOOL showScene;
@@ -837,6 +840,16 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     [self.toggleSceneButton addTarget:self action:@selector(toggleScenePreview:)
         forControlEvents:UIControlEventTouchUpInside];
 
+    self.exploreButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIButtonConfiguration* exploreConfig = [UIButtonConfiguration filledButtonConfiguration];
+    exploreConfig.title = @"Explorar caminando";
+    exploreConfig.baseBackgroundColor = [UIColor colorWithRed:0.13 green:0.43 blue:0.34 alpha:1];
+    self.exploreButton.configuration = exploreConfig;
+    self.exploreButton.hidden = YES;
+    self.exploreButton.accessibilityIdentifier = @"bo1EnterFirstPerson";
+    [self.exploreButton addTarget:self action:@selector(openExplorer:)
+        forControlEvents:UIControlEventTouchUpInside];
+
     self.stateLabel = [[UILabel alloc] init];
     self.stateLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
     self.stateLabel.adjustsFontForContentSizeCategory = YES;
@@ -868,8 +881,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 
     UIStackView* content = [[UIStackView alloc] initWithArrangedSubviews:
         @[title, detail, self.selectButton, self.addModelButton,
-          self.selectIwiButton, status, self.sceneView, self.textureView,
-          self.togglePreviewButton, self.toggleSceneButton, self.resultView]];
+          self.selectIwiButton, status, self.toggleSceneButton, self.exploreButton,
+          self.togglePreviewButton, self.sceneView, self.textureView, self.resultView]];
     content.axis = UILayoutConstraintAxisVertical;
     content.spacing = 12;
     content.translatesAutoresizingMaskIntoConstraints = NO;
@@ -902,18 +915,20 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 {
     [super viewDidAppear:animated];
     if ((!showIwiFixturePreview && !showModelFixturePreview &&
-         !showSceneFixturePreview) || self.iwiFixtureStarted) return;
+         !showSceneFixturePreview && !showExploreFixturePreview) ||
+         self.iwiFixtureStarted) return;
     self.iwiFixtureStarted = YES;
     // A fixed white backing makes the alpha-compositing assertion deterministic
     // in either appearance. The normal document picker retains its styling.
     self.textureView.backgroundColor = UIColor.whiteColor;
-    if (showModelFixturePreview || showSceneFixturePreview)
+    if (showModelFixturePreview || showSceneFixturePreview ||
+        showExploreFixturePreview)
     {
         _modelMesh = SyntheticCrossedPlanes();
         _sceneMeshes.push_back(_modelMesh);
         self.showModel = YES;
     }
-    if (showSceneFixturePreview)
+    if (showSceneFixturePreview || showExploreFixturePreview)
     {
         auto second = std::make_shared<bo1::model::Mesh>(*_modelMesh);
         second->name = "synthetic alternate foliage";
@@ -944,7 +959,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
         NSDictionary* report = success ? IwiFixtureLayoutReport(self.textureView)
             : @{@"status": @"fail", @"error": self.resultView.text ?: @"Fixture read failed"};
         NSString* markerName = @"bo1-iwi-preview.json";
-        if (showModelFixturePreview || showSceneFixturePreview)
+        if (showModelFixturePreview || showSceneFixturePreview ||
+        showExploreFixturePreview)
         {
             SCNNode* first = self.sceneView.scene.rootNode.childNodes.firstObject;
             // In the single-object preview the root child owns the geometry.
@@ -965,7 +981,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                     @"width": @(self.sceneView.bounds.size.width)}
                 : @{@"status": @"fail", @"error": @"SceneKit model preview not visible"};
             markerName = @"bo1-model-preview.json";
-            if (showSceneFixturePreview)
+            if (showSceneFixturePreview || showExploreFixturePreview)
             {
                 std::size_t instanceCount = 0;
                 BOOL hasGround = NO;
@@ -997,6 +1013,36 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
         NSString* marker = [NSTemporaryDirectory() stringByAppendingPathComponent:markerName];
         if (![json writeToFile:marker atomically:YES])
             NSLog(@"Could not write IWI preview marker");
+        if (showExploreFixturePreview && success &&
+            [report[@"status"] isEqualToString:@"pass"])
+        {
+            [self openExplorer:nil];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                dispatch_get_main_queue(), ^{
+                BO1ExploreViewController* explorer =
+                    (BO1ExploreViewController*)self.presentedViewController;
+                BOOL visible = [explorer isKindOfClass:BO1ExploreViewController.class]
+                    && explorer.view.window != nil && explorer.explorerCamera != nil
+                    && explorer.explorerView.pointOfView == explorer.explorerCamera
+                    && explorer.explorerView.scene != nil
+                    && [explorer.view viewWithTag:901] != nil
+                    && [explorer.view viewWithTag:902] != nil
+                    && [explorer.view viewWithTag:903] != nil
+                    && [explorer.view viewWithTag:904] != nil;
+                NSDictionary* explorerReport = visible
+                    ? @{@"status": @"pass", @"mode": @"first-person",
+                        @"control_count": @4, @"scene_sources": @2,
+                        @"camera_z": @(explorer.explorerCamera.position.z)}
+                    : @{@"status": @"fail", @"error": @"Walkthrough camera or touch controls not visible"};
+                NSString* name = [NSTemporaryDirectory()
+                    stringByAppendingPathComponent:@"bo1-explore-preview.json"];
+                NSData* bytes = [NSJSONSerialization
+                    dataWithJSONObject:explorerReport
+                    options:NSJSONWritingPrettyPrinted error:nullptr];
+                if (![bytes writeToFile:name atomically:YES])
+                    NSLog(@"Could not write first-person diagnostic marker");
+            });
+        }
     });
 }
 
@@ -1008,6 +1054,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     self.addModelButton.enabled = _sceneMeshes.size() < bo1::scene::MaxSources;
     self.togglePreviewButton.hidden = !ready;
     self.toggleSceneButton.hidden = !ready;
+    self.exploreButton.hidden = !ready || !self.showScene || !self.showModel;
     if (!ready)
     {
         self.sceneView.hidden = YES;
@@ -1059,6 +1106,25 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     self.showModel = YES;
     self.sceneView.scene = nil;
     [self refresh3DPreview];
+}
+
+- (void)openExplorer:(id)sender
+{
+    if (!self.showScene || !_modelMesh || !self.modelTexture || !self.sceneView.scene)
+        return;
+    float span = 0.5f, highest = 0.5f;
+    for (const auto& mesh : _sceneMeshes)
+    {
+        if (!mesh) continue;
+        span = std::max(span, std::max(
+            mesh->maxs[0] - mesh->mins[0], mesh->maxs[2] - mesh->mins[2]));
+        highest = std::max(highest, mesh->maxs[1] - mesh->mins[1]);
+    }
+    span = std::min(9000.f, std::max(span, highest * 0.45f)) * 1.4f;
+    const float eyeHeight = std::max(0.35f, highest * 0.85f);
+    BO1ExploreViewController* explorer = [[BO1ExploreViewController alloc]
+        initWithScene:self.sceneView.scene span:span eyeHeight:eyeHeight];
+    [self presentViewController:explorer animated:YES completion:nil];
 }
 
 - (void)addModelFromFastfile:(id)sender
@@ -1124,6 +1190,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     self.sceneView.hidden = YES;
     self.togglePreviewButton.hidden = YES;
     self.toggleSceneButton.hidden = YES;
+    self.exploreButton.hidden = YES;
     self.textureView.hidden = self.textureView.image == nil;
     self.stateLabel.text = isIwi ? @"Decodificando textura DXT3…" :
         @"Leyendo y comprobando el archivo…";
@@ -1193,7 +1260,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                 [self.activity stopAnimating];
                 [self refresh3DPreview];
                 if ((showIwiFixturePreview || showModelFixturePreview ||
-                    showSceneFixturePreview) && self.iwiFixtureURL)
+                    showSceneFixturePreview || showExploreFixturePreview) &&
+                    self.iwiFixtureURL)
                 {
                     if (success) self.stateLabel.text = @"Textura sintética DXT3: colores y transparencia.";
                     [self finishIwiFixture:success];
@@ -1274,6 +1342,7 @@ int main(int argc, char* argv[])
             showIwiFixturePreview = showIwiFixturePreview || std::strcmp(argv[index], "--fixture-iwi-preview") == 0;
             showModelFixturePreview = showModelFixturePreview || std::strcmp(argv[index], "--fixture-model-preview") == 0;
             showSceneFixturePreview = showSceneFixturePreview || std::strcmp(argv[index], "--fixture-scene-preview") == 0;
+            showExploreFixturePreview = showExploreFixturePreview || std::strcmp(argv[index], "--fixture-explore-preview") == 0;
         }
         return UIApplicationMain(argc, argv, nil, NSStringFromClass(BO1AppDelegate.class));
     }
