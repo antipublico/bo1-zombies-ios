@@ -73,17 +73,17 @@ int main()
         "palette index 0 and transparent four-bit alpha");
     Check(Pixel(rgba, 4, 1, 0, 0, 255, 0, 136),
         "palette index 1 and half alpha");
-    Check(Pixel(rgba, 4, 2, 170, 85, 0, 255),
+    Check(Pixel(rgba, 4, 2, 0, 170, 85, 0, 255),
         "palette index 2 uses two-thirds first color");
-    Check(Pixel(rgba, 4, 3, 85, 170, 0, 17),
+    Check(Pixel(rgba, 4, 3, 0, 85, 170, 0, 17),
         "palette index 3 uses two-thirds second color");
 
     auto reverse = blend;
     bo1::bytecode::Store<std::uint16_t>(reverse.data() + 8, 0x07e0);
     bo1::bytecode::Store<std::uint16_t>(reverse.data() + 10, 0xf800);
     Check(DecodeBC2RGBA(reverse.data(), reverse.size(), 4, 4, rgba)
-        && Pixel(rgba, 4, 2, 85, 170, 0, 255)
-        && Pixel(rgba, 4, 3, 170, 85, 0, 17),
+        && Pixel(rgba, 4, 2, 0, 85, 170, 0, 255)
+        && Pixel(rgba, 4, 3, 0, 170, 85, 0, 17),
         "BC2 uses four-color mode even when endpoint 0 < endpoint 1");
 
     const Block green = Solid(0x07e0, 8);
