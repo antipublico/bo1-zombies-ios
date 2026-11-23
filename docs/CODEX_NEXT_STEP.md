@@ -83,3 +83,12 @@ Last successful Actions workflow for the existing nine-instance model viewer: ht
 ### Public repository CI revalidation (2026-11-23)
 
 The repository was made public by its owner to try GitHub-hosted standard runners without private-repository minute charges. This is **not** evidence that an account-wide billing restriction has cleared. The new first-person `ios/bo1_explore_view.mm` has not produced a validated IPA yet. Run the complete `portable-and-ios` pipeline, including `explore-preview.json/png` and ARM64 IPA artifact, then report real evidence only. Keep `main` untouched, PR #1 draft, and original game assets out of commits. If runner allocation still fails at zero steps, report the exact account-level blocker instead of claiming a code failure.
+
+
+### Current milestone: SE 2020 scrolling app + native Windows compact scene exporter (2026-11-23)
+
+- SE 2020 screenshot showed the first-person button pushed below the visible region by the fixed-height view stack. iOS app now uses UIScrollView, shorter previews on <=700pt screens, and puts the first-person action **above** the large scene view.
+- Added .bo1scene selector and decoder to iOS. Its bounded 16 MiB little-endian format contains one DXT3/BC2 texture top mip and 1–6 CPU-only meshes reconstructed from the user's own FastFiles; native UIKit+SceneKit displays the 9-instance *synthetic* placement and first-person controls. This is NOT an original BO1 map and has no gameplay.
+- Added native Windows picker GUI bo1_scene_packer_win.exe to choose 1–6 local .ff files and a local DXT3 .iwi, then save a compact .bo1scene file. No game binaries are bundled or uploaded. Windows Actions run 45162108170 passed, published artifact bo1-scene-packer-windows-x64, alongside Windows inspector.
+- Added CTest scene_pack for strict binary roundtrip and invalid/truncated inputs; a synthetic iOS --fixture-packed-scene-preview checks actual file import, SceneKit layout, the walking button, and scrolling.
+- **NEXT:** validate full macOS sanitizers + iOS ARM64 build + simulator smoke with this head. Check scene-pack-preview.png/json and explore-preview.png/json, and ensure no new failure. Publish fresh bo1-ios-development-unsigned IPA for this exact commit; do not confuse with previous IPA e3a8d6c. Real iPhone SE 2020 still needs owner signing and physical UI inspection.
