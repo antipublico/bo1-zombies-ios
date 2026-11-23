@@ -78,3 +78,8 @@ The first-person feature exists on `port/xmodel-temp-stream-stack`: `ios/bo1_exp
 The full macOS/iOS pipeline is now opt-in via `workflow_dispatch` or a commit message containing `[ios ci]` to avoid exhausting private-repository billable macOS minutes. All ordinary pushes still request Windows CTests. User should independently inspect GitHub Billing & Licensing / Actions usage and job banners; do not make account billing changes without explicit approval. When runner access is restored, run full Actions and fix genuine compile/simulator failures, upload `explore-preview.png/json`, verify the fullscreen first-person scene/camera/buttons on simulator, then prepare unsigned IPA for the user's Windows sign/install flow.
 
 Last successful Actions workflow for the existing nine-instance model viewer: https://github.com/antipublico/bo1-zombies-ios/actions/runs/45150908043 .
+
+
+### Public repository CI revalidation (2026-11-23)
+
+The repository was made public by its owner to try GitHub-hosted standard runners without private-repository minute charges. This is **not** evidence that an account-wide billing restriction has cleared. The new first-person `ios/bo1_explore_view.mm` has not produced a validated IPA yet. Run the complete `portable-and-ios` pipeline, including `explore-preview.json/png` and ARM64 IPA artifact, then report real evidence only. Keep `main` untouched, PR #1 draft, and original game assets out of commits. If runner allocation still fails at zero steps, report the exact account-level blocker instead of claiming a code failure.
