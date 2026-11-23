@@ -39,5 +39,32 @@ int main(){
     original.meshes[0].indices[2]=2;
     original.meshes[0].vertices[2].u=std::numeric_limits<float>::infinity();
     CHECK(!bo1::scene_pack::Encode(original,bytes,error));
+    original.meshes[0].vertices[2].u=.5f;
+    original.meshes[0].indices[2]=2;
+    // V2: independently addressed textures for 2 model sources; v1 remains readable.
+    original.meshes.push_back(mesh);
+    bo1::scene_pack::Texture second{};
+    second.width=4;second.height=4;second.bc2.resize(16,0x55);
+    original.extraTextures.push_back(second);
+    original.textureSlots={0,1};
+    CHECK(bo1::scene_pack::Encode(original,bytes,error));
+    CHECK(bytes[7]=='2');
+    CHECK(bo1::scene_pack::Decode(bytes.data(),bytes.size(),roundtrip,error));
+    CHECK(roundtrip.meshes.size()==2 && roundtrip.extraTextures.size()==1);
+    CHECK(roundtrip.extraTextures[0].bc2==second.bc2);
+    CHECK(roundtrip.textureSlots[0]==0 && roundtrip.textureSlots[1]==1);
+    auto invalid=bytes;
+    // Per-mesh slot is immediately after its 12-byte mesh header.
+    const size_t secondTextureEnd=32+16+12+16;
+    invalid[secondTextureEnd+12]=4;
+    CHECK(!bo1::scene_pack::Decode(invalid.data(),invalid.size(),roundtrip,error));
+    invalid=bytes;invalid[28]=7; // declares seven additional textures
+    CHECK(!bo1::scene_pack::Decode(invalid.data(),invalid.size(),roundtrip,error));
+    for(size_t i=0;i<bytes.size();++i) {
+        bo1::scene_pack::Package discarded;
+        CHECK(!bo1::scene_pack::Decode(bytes.data(),i,discarded,error));
+    }
+    original.textureSlots[1]=3;
+    CHECK(!bo1::scene_pack::Encode(original,bytes,error));
     std::puts("BO1 scene pack roundtrip and malformed file tests passed");
 }
