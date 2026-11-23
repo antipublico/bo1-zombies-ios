@@ -187,7 +187,34 @@ def main():
         simctl("io", device_id, "screenshot", str(scene_png))
         if not scene_png.is_file() or scene_png.stat().st_size < 5000:
             raise RuntimeError("No simulator screenshot for multi-model scene")
-        print("iOS native, IWI UI, 3D model and staged scene checks passed; screenshots saved.",
+        # Full-screen first-person HUD, still using only synthetic meshes.
+        # Check actual UIKit presentation and four touch controls; screenshot
+        # is saved for human inspection without original game resources.
+        explore_marker = data_container / "tmp" / "bo1-explore-preview.json"
+        explore_marker.unlink(missing_ok=True)
+        simctl("launch", "--terminate-running-process", device_id, bundle_id,
+               "--fixture-explore-preview")
+        deadline = time.monotonic() + 60
+        explore_report = None
+        while time.monotonic() < deadline:
+            if explore_marker.is_file():
+                explore_report = json.loads(explore_marker.read_text(encoding="utf-8"))
+                break
+            time.sleep(0.25)
+        if (explore_report is None or explore_report.get("status") != "pass"
+                or explore_report.get("mode") != "first-person"
+                or explore_report.get("control_count") != 4
+                or explore_report.get("scene_sources") != 2
+                or explore_report.get("camera_z", -1) <= 0):
+            raise RuntimeError(f"First-person HUD/camera failed: {explore_report}")
+        (args.output / "explore-preview.json").write_text(
+            json.dumps(explore_report, indent=2), encoding="utf-8")
+        time.sleep(2)
+        explore_png = args.output / "explore-preview.png"
+        simctl("io", device_id, "screenshot", str(explore_png))
+        if not explore_png.is_file() or explore_png.stat().st_size < 5000:
+            raise RuntimeError("No simulator screenshot for first-person controls")
+        print("iOS native, IWI, 3D model, staged scene and walking HUD passed; screenshots saved.",
               flush=True)
     finally:
         simctl("shutdown", device_id, check=False)
