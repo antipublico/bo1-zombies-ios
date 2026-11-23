@@ -69,3 +69,12 @@ The app now supports the 9-instance staged SceneKit layout from `src/platform/bo
 ### Update: first-person staged scene and CI startup overlap
 
 Added `ios/bo1_explore_view.h/.mm`: a distinct fullscreen UIKit+SceneKit controller with four held directional buttons and pan-to-look camera. `ios/main.mm` offers the **Explorar caminando** button only in the 9-instance SceneKit layout. A synthetic `--fixture-explore-preview` run produces `explore-preview.png/json`; marker asserts presentation, camera and four controls but **does not emulate player gestures or original BO1 physics**. Changes to `tools/ios_simulator_boot.py`, `tools/ios_simulator_smoke.py` and workflow preboot the iPhone simulator during two Xcode builds, rather than after, with the objective of reducing total Actions time; measure the actual result. Do not claim all CI green until the new run completes.
+
+
+### Current environment blocker (2026-11-23)
+
+The first-person feature exists on `port/xmodel-temp-stream-stack`: `ios/bo1_explore_view.mm/.h`, `src/platform/bo1_explore_motion.h`, `tests/explore_motion_tests.cpp`, `--fixture-explore-preview` in the simulator runner. But **no compiled IPA for this version has been produced**. Actions runs `45154078512` (both jobs fail within 2–3 seconds, `runner_id=0`, no steps/logs) and `45154723996` (Windows same failure; macOS intentionally skipped) show a GitHub-hosted runner assignment or account-level billing/quota problem, not a compile error. Do not conflate them.
+
+The full macOS/iOS pipeline is now opt-in via `workflow_dispatch` or a commit message containing `[ios ci]` to avoid exhausting private-repository billable macOS minutes. All ordinary pushes still request Windows CTests. User should independently inspect GitHub Billing & Licensing / Actions usage and job banners; do not make account billing changes without explicit approval. When runner access is restored, run full Actions and fix genuine compile/simulator failures, upload `explore-preview.png/json`, verify the fullscreen first-person scene/camera/buttons on simulator, then prepare unsigned IPA for the user's Windows sign/install flow.
+
+Last successful Actions workflow for the existing nine-instance model viewer: https://github.com/antipublico/bo1-zombies-ios/actions/runs/45150908043 .

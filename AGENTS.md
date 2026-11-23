@@ -15,3 +15,6 @@ This file applies to the whole repository. **Start with [docs/CODEX_NEXT_STEP.md
 
 
 - Latest next milestone: diagnostic fullscreen SceneKit first-person camera (touch held arrows + pan-to-look) over **synthetic placements of real LOD0 models**. Original Zombies movement, gameplay and collisions are not implemented. Simulator preboot overlaps builds to reduce Actions duration; check fresh run and screenshots. Loading second XModel within the same FF is still blocked by unresolved recursive material/child stream serialization and cannot be skipped without decoding.
+
+
+- **CI blocker (2026-11-23):** GitHub Actions jobs currently fail instantly with `runner_id=0` and zero steps on macOS and Windows, including `45154078512` and `45154723996`. This is not a compiler diagnostic. Do not claim the new first-person code passed CI until a new runner actually executes it. The last confirmed green build is `45150908043`, before the first-person additions. New full iOS runs require **workflow_dispatch** or an `[ios ci]` commit-message opt-in, to preserve private-repo macOS minutes. Do not enable billing or change user spending limits.

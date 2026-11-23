@@ -264,3 +264,14 @@ El escenario de diagnóstico con nueve instancias ahora incluye **«Explorar cam
 La prueba de CI añade `--fixture-explore-preview`, que crea una escena artificial de dos mallas fuente, presenta la interfaz a pantalla completa, comprueba el nodo de cámara y los cuatro controles y guarda `explore-preview.png/json` (no realiza pruebas automatizadas de gestos reales). La app ARM64 sigue distribuyéndose sin firmar para instalación local con una cuenta de Apple del usuario.
 
 Para reducir esperas de CI, se inicia el simulador macOS en paralelo con la compilación iOS; el script `tools/ios_simulator_smoke.py` acepta opcionalmente `--prebooted-udid` y conserva el arranque independiente cuando ese parámetro no está.
+
+
+### Compilación y pruebas de iOS sin agotar GitHub Actions
+
+Las ejecuciones de macOS requieren iniciar un simulador de iPhone y pueden consumir muchos minutos de computación en repositorios privados. Para evitar repetirlas en cada commit, **el trabajo completo de iOS ahora es opt-in**: en GitHub, abrí **Actions → Portable components and iOS app → Run workflow**, elegí `port/xmodel-temp-stream-stack` y ejecutá. Los commits cuya descripción incluya `[ios ci]` también lo activan. Las pruebas de Windows se solicitan automáticamente con cada push.
+
+El script `tools/ios_simulator_boot.py` intenta empezar a arrancar CoreSimulator durante la compilación de Xcode; el simulador de `tools/ios_simulator_smoke.py` utiliza la ID de ese dispositivo. Si ejecutás el script manualmente sin `--prebooted-udid`, mantiene su comportamiento anterior.
+
+**Bloqueo observado el 23/11/2026:** tras la ejecución exitosa `45150908043`, GitHub Actions rechazó las nuevas ejecuciones antes de asignar los runners (ambas plataformas, `runner_id=0`, cero pasos y sin logs; por ejemplo, `45154078512`); incluso la nueva ejecución rápida de Windows `45154723996` falló igual. **Esto no valida ni invalida el código nuevo de exploración**, que todavía necesita una compilación real y una prueba de simulador. Verificá [GitHub Billing & Licensing](https://github.com/settings/billing) (uso de Actions, presupuestos, pagos o avisos); si los límites están normales, revisá GitHub Status/Support, ya que los mismos síntomas pueden indicar un problema de asignación de runners. No habilites gastos ni compartas datos bancarios sin decidirlo vos.
+
+Cuando Actions vuelva a iniciar jobs, ejecutar el workflow completo para confirmar el modo de exploración, descargar la IPA sin firma, instalarla desde Windows con el método habitual y abrir `.ff` + `.iwi` → **Ver escena (9 plantas)** → **Explorar caminando**. Podés mantener instalada la última versión verificada (`45150908043`) mientras tanto.
