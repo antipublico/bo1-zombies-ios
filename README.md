@@ -73,10 +73,24 @@ Native types still to implement include materials,
 images, models, animation, collision and sound.
 
 The next Kino model has 12 surfaces, four LODs and three collision surfaces.
-Adding XModel requires a TEMP stream stack for nested Material/TechniqueSet
-headers, aliases to nested asset-pointer slots, 16-byte surface alignment,
+The portable loader now decodes the 252-byte Win32 XModel root header as
+**diagnostic metadata** and stops before its unsupported nested bodies.
+`AssetPrefix::pendingXModel` retains the counts, tags and four LOD descriptors
+without casting serialized pointers to ARM64 pointers. The iOS inspector
+reports these values and an estimate of fixed-size inline child arrays.
+No model is published as a reconstructed native asset at that stopping point;
+script strings, surfaces, materials, shaders and physics are not loaded by
+this preview. The compressed stream and checksum are still validated before
+the preview is returned.
+
+Preparatory native helpers also decode the 68-byte Win32 XSurface header
+and calculate the consecutive inline blend, tension, vertex, rigid-list and
+triangle-index byte counts. They do not allocate these arrays or translate D3D
+handles. The nested TEMP stream cursor enforces a 64-frame stack and bounded
+alignment, but actual nested XModel/Material operations have **not** yet
+been wired to that stack. Completing XModel still requires child pointer
+resolution, correct stream-block alignment, 16-byte packed-vertex alignment,
 material/image decoding and a representation for bone script-string IDs.
-The current root-only TEMP check must not be reused unchanged for nested assets.
 Geometry uploads and physics creation remain separate from CPU reconstruction.
 
 Configure the desktop engine with `-DBO1_WITH_STEAM=OFF` to link the static
