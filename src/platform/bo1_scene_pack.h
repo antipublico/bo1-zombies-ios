@@ -9,7 +9,9 @@
 #include <string>
 #include <vector>
 
-// BO1SCN01: compact portable diagnostic scene, not a full BO1 game/map.
+// BO1SCN01 legacy and BO1SCN02 multi-texture diagnostic packages. No original map.
+// V2 keeps the first texture in the original header; extras are bounded and each
+// mesh explicitly selects a texture slot. No original FF/IWD/IWI is embedded.
 // LE fixed header (32 bytes), BC2 top-mip pixels, then bounded CPU mesh data.
 // The original .ff/.iwd/.iwi files are never included in this package.
 namespace bo1::scene_pack {
@@ -19,9 +21,15 @@ inline constexpr size_t MaxVerticesPerModel = 65536;
 inline constexpr size_t MaxIndicesPerModel = 196608;
 inline constexpr char Magic[8] = {'B','O','1','S','C','N','0','1'};
 
+struct Texture {
+    std::uint32_t width = 0, height = 0;
+    std::vector<std::uint8_t> bc2;
+};
 struct Package {
     std::uint32_t width = 0, height = 0;
     std::vector<std::uint8_t> bc2;
+    std::vector<Texture> extraTextures;
+    std::vector<std::uint32_t> textureSlots; // per mesh; empty means all use slot zero
     std::vector<bo1::model::Mesh> meshes;
 };
 
@@ -31,6 +39,19 @@ inline bool Validate(const Package& p, std::string& error) {
         p.bc2.size()!=compressed || !p.width || !p.height) {
         error="BC2 texture dimensions/bytes invalid"; return false;
     }
+    if (p.extraTextures.size()>=MaxModels ||
+        (!p.textureSlots.empty() && p.textureSlots.size()!=p.meshes.size())) {
+        error="Invalid texture table or mesh slot count";return false;
+    }
+    for (const auto& t:p.extraTextures) {
+        size_t bc=0,rgba=0;
+        if(!bo1::texture::BC2ByteSizes(t.width,t.height,bc,rgba) ||
+           t.bc2.size()!=bc){error="Invalid additional BC2 texture";return false;}
+    }
+    for(const auto slot:p.textureSlots)
+        if(slot>p.extraTextures.size()) {
+            error="Mesh texture slot outside table";return false;
+        }
     if (p.meshes.empty() || p.meshes.size()>MaxModels) {
         error="Expected between one and six models"; return false;
     }
@@ -60,9 +81,15 @@ inline bool Encode(const Package& p, std::vector<std::uint8_t>& output,
                    std::string& error) {
     output.clear();
     if (!Validate(p,error)) return false;
+    const bool version2=!p.extraTextures.empty() ||
+        std::any_of(p.textureSlots.begin(),p.textureSlots.end(),
+                    [](std::uint32_t id){return id!=0;});
     std::uint64_t needed=32+p.bc2.size();
+    if(version2) {
+        for(const auto& tex:p.extraTextures)needed+=12+tex.bc2.size();
+    }
     for (const auto& m:p.meshes)
-        needed+=12+m.name.size()+std::uint64_t(m.vertices.size())*20+
+        needed+=(version2?16:12)+m.name.size()+std::uint64_t(m.vertices.size())*20+
                 std::uint64_t(m.indices.size())*4;
     if (needed>MaxBytes) {error="Scene exceeds 16 MiB";return false;}
     output.reserve(static_cast<size_t>(needed));
@@ -71,14 +98,23 @@ inline bool Encode(const Package& p, std::vector<std::uint8_t>& output,
         output.insert(output.end(),b,b+4);
     };
     output.insert(output.end(),Magic,Magic+8);
-    append32(1);append32(p.width);append32(p.height);
+    if(version2)output[7]='2';
+    append32(version2?2u:1u);append32(p.width);append32(p.height);
     append32(static_cast<std::uint32_t>(p.meshes.size()));
-    append32(static_cast<std::uint32_t>(p.bc2.size()));append32(0);
+    append32(static_cast<std::uint32_t>(p.bc2.size()));
+    append32(version2?static_cast<std::uint32_t>(p.extraTextures.size()):0u);
     output.insert(output.end(),p.bc2.begin(),p.bc2.end());
-    for (const auto& m:p.meshes) {
+    if(version2)for(const auto& tex:p.extraTextures){
+        append32(tex.width);append32(tex.height);
+        append32(static_cast<std::uint32_t>(tex.bc2.size()));
+        output.insert(output.end(),tex.bc2.begin(),tex.bc2.end());
+    }
+    for (std::size_t meshIndex=0;meshIndex<p.meshes.size();++meshIndex) {
+        const auto& m=p.meshes[meshIndex];
         append32(static_cast<std::uint32_t>(m.name.size()));
         append32(static_cast<std::uint32_t>(m.vertices.size()));
         append32(static_cast<std::uint32_t>(m.indices.size()));
+        if(version2) append32(p.textureSlots.empty()?0:p.textureSlots[meshIndex]);
         output.insert(output.end(),m.name.begin(),m.name.end());
         for(const auto& v:m.vertices) {
             for(float f:{v.x,v.y,v.z,v.u,v.v}){
@@ -95,10 +131,11 @@ inline bool Encode(const Package& p, std::vector<std::uint8_t>& output,
 inline bool Decode(const std::uint8_t* data, size_t size, Package& output,
                    std::string& error) {
     output={};
-    if(!data||size<32||size>MaxBytes||
-       std::memcmp(data,Magic,8)!=0) {
-        error="Not a valid BO1SCN01 package";return false;
+    if(!data||size<32||size>MaxBytes||std::memcmp(data,Magic,7)!=0||
+       (data[7]!='1' && data[7]!='2')) {
+        error="Not a valid BO1SCN01/02 package";return false;
     }
+    const bool version2=data[7]=='2';
     size_t pos=8;
     auto read32=[&](std::uint32_t& n)->bool {
         if(pos>size||size-pos<4)return false;
@@ -108,7 +145,10 @@ inline bool Decode(const std::uint8_t* data, size_t size, Package& output,
     Package p;
     if(!read32(version)||!read32(p.width)||!read32(p.height)||
        !read32(models)||!read32(bc2size)||!read32(reserved)||
-       version!=1||reserved!=0||models==0||models>MaxModels) {
+       version!=(version2?2u:1u)||
+       (!version2 && reserved!=0)||
+       (version2 && reserved>=MaxModels)||
+       models==0||models>MaxModels) {
         error="Invalid scene header or version";return false;
     }
     std::size_t expected=0,rgba=0;
@@ -117,9 +157,25 @@ inline bool Decode(const std::uint8_t* data, size_t size, Package& output,
         error="Corrupt BC2 top mip";return false;
     }
     p.bc2.assign(data+pos,data+pos+bc2size);pos+=bc2size;
+    if(version2)for(std::uint32_t t=0;t<reserved;++t){
+        Texture tex;
+        std::uint32_t length=0;
+        if(!read32(tex.width)||!read32(tex.height)||!read32(length)) {
+            error="Incomplete additional texture header";return false;
+        }
+        std::size_t expectedTex=0, rgbaTex=0;
+        if(!bo1::texture::BC2ByteSizes(tex.width,tex.height,expectedTex,rgbaTex) ||
+           length!=expectedTex || length>size-pos) {
+            error="Invalid additional texture bytes";return false;
+        }
+        tex.bc2.assign(data+pos,data+pos+length);pos+=length;
+        p.extraTextures.push_back(std::move(tex));
+    }
     for(std::uint32_t k=0;k<models;++k) {
         std::uint32_t name=0,vertices=0,indices=0;
+        std::uint32_t slot=0;
         if(!read32(name)||!read32(vertices)||!read32(indices)||
+           (version2 && !read32(slot))||slot>p.extraTextures.size()||
            name>256||vertices==0||vertices>MaxVerticesPerModel||
            indices==0||indices>MaxIndicesPerModel||indices%3) {
             error="Invalid mesh header";return false;
@@ -155,7 +211,8 @@ inline bool Decode(const std::uint8_t* data, size_t size, Package& output,
             if(!read32(idx)){error="Missing index";return false;}
             mesh.indices.push_back(idx);
         }
-        mesh.surfaceCount=1; // topology is retained; per-surface materials are not.
+        mesh.surfaceCount=1; // Per-surface material slots are not yet recovered.
+        p.textureSlots.push_back(slot);
         p.meshes.push_back(std::move(mesh));
     }
     if(pos!=size){error="Trailing bytes after last model";return false;}
