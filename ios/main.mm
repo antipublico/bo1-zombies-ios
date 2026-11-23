@@ -277,6 +277,11 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
                 displayName,
                 static_cast<unsigned long long>(skel.inlineArrayBytes),
                 skel.boneNameBytes.size() / 2, skel.unresolvedFields];
+            [text appendFormat:@"Cabeceras XSurface: %zu\n"
+                "Vértices declarados: %llu\nTriángulos declarados: %llu\n",
+                skel.surfaceHeaders.size(),
+                static_cast<unsigned long long>(skel.declaredVertices),
+                static_cast<unsigned long long>(skel.declaredTriangles)];
         }
     }
     [text appendString:@"\nLos shaders aún no se ejecutan en la GPU. El contenido todavía no está integrado en una partida."];

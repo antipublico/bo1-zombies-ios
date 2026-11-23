@@ -4,6 +4,7 @@
 #include "db_rawfile_types.h"
 #include "db_techset_types.h"
 #include "db_xmodel_header.h"
+#include "db_xsurface_header.h"
 #include <stringed/localize_entry.h>
 #include <universal/com_stringtable_types.h>
 #include <memory>
@@ -29,6 +30,12 @@ struct XModelSkeletonPreview
     uint64_t inlineArrayBytes = 0;
     // Bit 0..5 denotes a referenced (non-inline) child array in the order above.
     uint32_t unresolvedFields = 0;
+    // Complete XSurface headers are read as a contiguous array in block 4.
+    // Their nested vertex/collision/material resources are not materialized.
+    std::vector<XSurfaceHeader> surfaceHeaders;
+    uint64_t surfaceHeaderBytes = 0;
+    uint64_t declaredVertices = 0;
+    uint64_t declaredTriangles = 0;
 };
 
 struct NativeAsset

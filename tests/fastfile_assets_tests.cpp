@@ -175,22 +175,28 @@ int main()
     Put32(modelPayload, modelStart + 36, UINT32_MAX); // Material pointers.
     Put32(modelPayload, modelStart + 172, UINT32_MAX); // Collision surfaces.
     Put32(modelPayload, modelStart + 176, 3);
+    // Load_XSurfaceArray reads 12 serialized 68-byte headers as one block.
+    modelPayload.insert(modelPayload.end(), 12 * XSurfaceDiskHeaderSize, 0);
+    Put32(modelPayload, 0, static_cast<uint32_t>(modelPayload.size() - 36));
     load(modelPayload, InspectionResult::Ok);
     Check(result.stop == AssetStop::UnsupportedModelBody && result.nextAsset == 0
         && result.entries.empty() && result.pendingXModel.has_value()
         && result.pendingXModelSkeleton.has_value()
         && result.pendingXModelSkeleton->inlineArrayBytes == 0
+        && result.pendingXModelSkeleton->surfaceHeaders.size() == 12
+        && result.pendingXModelSkeleton->surfaceHeaderBytes == 816
         && result.pendingXModel->numBones == 8 && result.pendingXModel->numSurfaces == 12
         && result.pendingXModel->numCollisionSurfaces == 3
-        && result.decodedAssetBytes == 252,
-        "XModel header preview stops before unsupported geometry and materials");
+        && result.decodedAssetBytes == 252 + 816,
+        "XModel and surface headers preview stops before vertex data and materials");
     Check(result.pendingXModel && CalculateXModelInlineBytes(*result.pendingXModel).surfaceHeaders == 816,
         "pending XModel metadata exposes bounded surface array estimate");
 
     // The native loader must read XString followed by the six fixed skeletal
     // arrays in exactly the original Load_XModel child order, without padding
     // in the compressed stream. Block-4 alignment is tracked independently.
-    auto modelWithBones = modelPayload;
+    auto modelWithBones = Bytes(modelPayload.begin(),
+        modelPayload.begin() + modelStart + XModelDiskHeaderSize);
     modelWithBones[modelStart + 4] = 3; // three bones, one root.
     modelWithBones[modelStart + 5] = 1;
     Put32(modelWithBones, modelStart, UINT32_MAX); // XString.
@@ -198,11 +204,11 @@ int main()
         Put32(modelWithBones, modelStart + field, UINT32_MAX);
     const char name[] = "model";
     modelWithBones.insert(modelWithBones.end(), name, name + sizeof(name));
-    const auto firstBone = modelWithBones.size();
     for (size_t i = 0; i < 6; ++i) modelWithBones.push_back(static_cast<uint8_t>(i + 1));
     modelWithBones.push_back(0); modelWithBones.push_back(1); // parent bytes.
     for (size_t i = 0; i < 16 + 32 + 3 + 96; ++i)
         modelWithBones.push_back(static_cast<uint8_t>((i + 3) & 255));
+    modelWithBones.insert(modelWithBones.end(), 12 * XSurfaceDiskHeaderSize, 0);
     Put32(modelWithBones, 0, static_cast<uint32_t>(modelWithBones.size() - 36));
     load(modelWithBones, InspectionResult::Ok);
     Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->name == "model"
@@ -216,7 +222,8 @@ int main()
         && result.pendingXModelSkeleton->baseMatrices.size() == 96
         && result.pendingXModelSkeleton->inlineArrayBytes == 155
         && result.pendingXModelSkeleton->unresolvedFields == 0
-        && result.decodedAssetBytes == 252 + 6 + 155,
+        && result.pendingXModelSkeleton->surfaceHeaders.size() == 12
+        && result.decodedAssetBytes == 252 + 6 + 155 + 816,
         "XModel skeleton preview reads ordered inline children without Win32 pointer casts");
 
     auto referencedModel = modelPayload;
@@ -224,8 +231,27 @@ int main()
     load(referencedModel, InspectionResult::Ok);
     Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->unresolvedFields == 1u
         && result.pendingXModelSkeleton->boneNameBytes.empty()
-        && result.decodedAssetBytes == 252,
+        && result.decodedAssetBytes == 252 + 816,
         "referenced bone array remains unresolved without consuming FILE data");
+
+    auto withGeometry = modelPayload;
+    constexpr size_t surfStart = modelStart + XModelDiskHeaderSize;
+    bo1::bytecode::Store<uint16_t>(withGeometry.data() + surfStart + 4, 123);
+    bo1::bytecode::Store<uint16_t>(withGeometry.data() + surfStart + 6, 45);
+    bo1::bytecode::Store<uint16_t>(withGeometry.data() + surfStart + 2, 2);
+    load(withGeometry, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->surfaceHeaders.size() == 12
+        && result.pendingXModelSkeleton->surfaceHeaders[0].vertCount == 123
+        && result.pendingXModelSkeleton->surfaceHeaders[0].triCount == 45
+        && result.pendingXModelSkeleton->surfaceHeaders[0].flags == 2
+        && result.pendingXModelSkeleton->declaredVertices == 123
+        && result.pendingXModelSkeleton->declaredTriangles == 45,
+        "XModel geometry preview decodes a serialized XSurface array");
+    auto malformedSurface = modelPayload;
+    bo1::bytecode::Store<int16_t>(malformedSurface.data() + surfStart + 16, -1);
+    load(malformedSurface, InspectionResult::InvalidFormat);
+    Check(!result.pendingXModel && !result.pendingXModelSkeleton,
+        "invalid XSurface header does not leak partial model data");
 
     auto invalidModel = modelPayload;
     invalidModel[modelStart + 5] = 9; // More root bones than total bones.

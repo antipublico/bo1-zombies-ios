@@ -69,7 +69,8 @@ public:
                     if (!DecodeXModelHeader(modelDisk, sizeof(modelDisk), model))
                         return Fail("XModel header contains invalid bone, LOD or collision counts.");
                     XModelSkeletonPreview skeleton{};
-                    if (!ModelSkeleton(model, skeleton))
+                    if (!ModelSkeleton(model, skeleton)
+                        || !ModelSurfaceHeaders(model, skeleton))
                         return false;
                     output.pendingXModel = model;
                     output.pendingXModelSkeleton = std::move(skeleton);
@@ -303,6 +304,33 @@ private:
             && array(model.translationsTag, children * 16, 4, preview.translations, 8u)
             && array(model.classificationsTag, bones, 1, preview.classifications, 16u)
             && array(model.baseMatricesTag, bones * 32, 4, preview.baseMatrices, 32u);
+    }
+
+    // Load_XSurfaceArray first reads every 68-byte surface header from block
+    // 4, then follows nested vertex/triangle/collision payloads. Parse only
+    // that first contiguous array here. Never advance past its child bodies.
+    bool ModelSurfaceHeaders(const XModelHeader& model, XModelSkeletonPreview& preview)
+    {
+        if (!model.surfacesTag) return true;
+        const size_t bytes = size_t(model.numSurfaces) * XSurfaceDiskHeaderSize;
+        if (!AdvanceBlock(bytes, 4)
+            || !Charge(bytes + size_t(model.numSurfaces) * sizeof(XSurfaceHeader)))
+            return false;
+        std::vector<uint8_t> raw(bytes);
+        if (bytes && !Read(raw.data(), bytes)) return false;
+        preview.surfaceHeaders.reserve(model.numSurfaces);
+        for (size_t i = 0; i < model.numSurfaces; ++i)
+        {
+            XSurfaceHeader header;
+            if (!DecodeXSurfaceHeader(raw.data() + i * XSurfaceDiskHeaderSize,
+                    XSurfaceDiskHeaderSize, header))
+                return Fail("XSurface header has invalid skin vertex group counts.");
+            preview.declaredVertices += header.vertCount;
+            preview.declaredTriangles += header.triCount;
+            preview.surfaceHeaders.push_back(header);
+        }
+        preview.surfaceHeaderBytes = bytes;
+        return true;
     }
 
     bool Raw(AssetNode& node)
