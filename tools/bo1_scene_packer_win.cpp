@@ -201,7 +201,7 @@ int WINAPI wWinMain(HINSTANCE module,HINSTANCE,LPWSTR,int show) {
     c.hInstance=module;
     c.lpszClassName=className;
     c.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
-    c.hCursor=LoadCursorW(nullptr,IDC_ARROW);
+    c.hCursor=LoadCursorW(nullptr,MAKEINTRESOURCEW(32512));
     if(!RegisterClassW(&c))return 1;
     windowHandle=CreateWindowW(className,L"BO1 iOS - Escena para iPhone",
         WS_OVERLAPPEDWINDOW&~WS_THICKFRAME&~WS_MAXIMIZEBOX,CW_USEDEFAULT,
