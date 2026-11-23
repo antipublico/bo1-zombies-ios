@@ -73,14 +73,17 @@ Native types still to implement include materials,
 images, models, animation, collision and sound.
 
 The next Kino model has 12 surfaces, four LODs and three collision surfaces.
-The portable loader now decodes the 252-byte Win32 XModel root header as
-**diagnostic metadata** and stops before its unsupported nested bodies.
+The portable loader now decodes the 252-byte Win32 XModel root header and its
+fixed skeletal child arrays (bone-name ID bytes, parents, quaternions,
+translations, classifications and base matrices) as **diagnostic metadata**,
+then stops before the unsupported surfaces/materials/physics bodies.
 `AssetPrefix::pendingXModel` retains the counts, tags and four LOD descriptors
 without casting serialized pointers to ARM64 pointers. The iOS inspector
 reports these values and an estimate of fixed-size inline child arrays.
-No model is published as a reconstructed native asset at that stopping point;
-script strings, surfaces, materials, shaders and physics are not loaded by
-this preview. The compressed stream and checksum are still validated before
+No model is published as a reconstructed native asset at that stopping point.
+Skeletal bytes are retained without resolving script-string IDs or arbitrary
+external alias offsets. Surfaces, materials, shaders and physics are not
+loaded by this preview. The compressed stream and checksum are still validated before
 the preview is returned.
 
 Preparatory native helpers also decode the 68-byte Win32 XSurface header

@@ -68,7 +68,11 @@ public:
                         return false;
                     if (!DecodeXModelHeader(modelDisk, sizeof(modelDisk), model))
                         return Fail("XModel header contains invalid bone, LOD or collision counts.");
+                    XModelSkeletonPreview skeleton{};
+                    if (!ModelSkeleton(model, skeleton))
+                        return false;
                     output.pendingXModel = model;
+                    output.pendingXModelSkeleton = std::move(skeleton);
                     output.stop = AssetStop::UnsupportedModelBody;
                     break;
                 }
@@ -261,6 +265,44 @@ private:
         }
         return reader.Fail(InspectionResult::UnsupportedReference,
             "Asset string reference does not identify a previously decoded string start.");
+    }
+
+    // Decode only the ordered, fixed-size skeletal children of the XModel.
+    // Stream position 4 is persistent; references are not dereferenced until
+    // the per-type alias resolver exists. The following XSurface body is
+    // deliberately NOT consumed, and no model object is published.
+    bool ModelSkeleton(const XModelHeader& model, XModelSkeletonPreview& preview)
+    {
+        const char* name = nullptr;
+        if (!String(model.nameTag, name)) return false;
+        if (name)
+        {
+            const size_t length = std::strlen(name);
+            if (!Charge(length + 1)) return false;
+            preview.name.assign(name, length);
+        }
+        const size_t bones = model.numBones;
+        const size_t children = bones - model.numRootBones;
+        auto array = [&](uint32_t tag, size_t bytes, uint64_t alignment,
+            std::vector<uint8_t>& dest, uint32_t unresolvedFlag) -> bool
+        {
+            if (tag != UINT32_MAX)
+            {
+                if (tag) preview.unresolvedFields |= unresolvedFlag;
+                return true;
+            }
+            if (!AdvanceBlock(bytes, alignment) || !Charge(bytes)) return false;
+            dest.resize(bytes);
+            if (bytes && !Read(dest.data(), bytes)) return false;
+            preview.inlineArrayBytes += bytes;
+            return true;
+        };
+        return array(model.boneNamesTag, bones * 2, 2, preview.boneNameBytes, 1u)
+            && array(model.parentListTag, children, 1, preview.parentList, 2u)
+            && array(model.quaternionsTag, children * 8, 2, preview.quaternions, 4u)
+            && array(model.translationsTag, children * 16, 4, preview.translations, 8u)
+            && array(model.classificationsTag, bones, 1, preview.classifications, 16u)
+            && array(model.baseMatricesTag, bones * 32, 4, preview.baseMatrices, 32u);
     }
 
     bool Raw(AssetNode& node)

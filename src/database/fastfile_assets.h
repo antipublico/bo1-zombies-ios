@@ -15,6 +15,22 @@ namespace detail { struct AssetStorage; class AssetBuilder; }
 
 enum class AssetStop { Complete, UnsupportedType, UnsupportedRootReference, UnsupportedModelBody };
 
+// Read-only CPU preview. Bone IDs are still serialized script-string indices,
+// not resolved engine strings. Arrays remain separate from any native XModel.
+struct XModelSkeletonPreview
+{
+    std::string name;
+    std::vector<uint8_t> boneNameBytes;
+    std::vector<uint8_t> parentList;
+    std::vector<uint8_t> quaternions;
+    std::vector<uint8_t> translations;
+    std::vector<uint8_t> classifications;
+    std::vector<uint8_t> baseMatrices;
+    uint64_t inlineArrayBytes = 0;
+    // Bit 0..5 denotes a referenced (non-inline) child array in the order above.
+    uint32_t unresolvedFields = 0;
+};
+
 struct NativeAsset
 {
     uint32_t type = 0;
@@ -42,6 +58,7 @@ struct AssetPrefix
     // Preview of the first XModel whose nested geometry has not been loaded.
     // This is NOT a reconstructed or registered native model.
     std::optional<XModelHeader> pendingXModel;
+    std::optional<XModelSkeletonPreview> pendingXModelSkeleton;
     uint64_t decodedAssetBytes = 0;
     // Budget accounting (including temporary data), not process RSS.
     uint64_t nativeBytes = 0;

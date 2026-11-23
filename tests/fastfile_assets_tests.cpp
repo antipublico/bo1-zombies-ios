@@ -178,12 +178,54 @@ int main()
     load(modelPayload, InspectionResult::Ok);
     Check(result.stop == AssetStop::UnsupportedModelBody && result.nextAsset == 0
         && result.entries.empty() && result.pendingXModel.has_value()
+        && result.pendingXModelSkeleton.has_value()
+        && result.pendingXModelSkeleton->inlineArrayBytes == 0
         && result.pendingXModel->numBones == 8 && result.pendingXModel->numSurfaces == 12
         && result.pendingXModel->numCollisionSurfaces == 3
         && result.decodedAssetBytes == 252,
         "XModel header preview stops before unsupported geometry and materials");
     Check(result.pendingXModel && CalculateXModelInlineBytes(*result.pendingXModel).surfaceHeaders == 816,
         "pending XModel metadata exposes bounded surface array estimate");
+
+    // The native loader must read XString followed by the six fixed skeletal
+    // arrays in exactly the original Load_XModel child order, without padding
+    // in the compressed stream. Block-4 alignment is tracked independently.
+    auto modelWithBones = modelPayload;
+    modelWithBones[modelStart + 4] = 3; // three bones, one root.
+    modelWithBones[modelStart + 5] = 1;
+    Put32(modelWithBones, modelStart, UINT32_MAX); // XString.
+    for (size_t field : {size_t(8), size_t(12), size_t(16), size_t(20), size_t(24), size_t(28)})
+        Put32(modelWithBones, modelStart + field, UINT32_MAX);
+    const char name[] = "model";
+    modelWithBones.insert(modelWithBones.end(), name, name + sizeof(name));
+    const auto firstBone = modelWithBones.size();
+    for (size_t i = 0; i < 6; ++i) modelWithBones.push_back(static_cast<uint8_t>(i + 1));
+    modelWithBones.push_back(0); modelWithBones.push_back(1); // parent bytes.
+    for (size_t i = 0; i < 16 + 32 + 3 + 96; ++i)
+        modelWithBones.push_back(static_cast<uint8_t>((i + 3) & 255));
+    Put32(modelWithBones, 0, static_cast<uint32_t>(modelWithBones.size() - 36));
+    load(modelWithBones, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->name == "model"
+        && result.pendingXModelSkeleton->boneNameBytes.size() == 6
+        && result.pendingXModelSkeleton->boneNameBytes[0] == 1
+        && result.pendingXModelSkeleton->parentList.size() == 2
+        && result.pendingXModelSkeleton->parentList[1] == 1
+        && result.pendingXModelSkeleton->quaternions.size() == 16
+        && result.pendingXModelSkeleton->translations.size() == 32
+        && result.pendingXModelSkeleton->classifications.size() == 3
+        && result.pendingXModelSkeleton->baseMatrices.size() == 96
+        && result.pendingXModelSkeleton->inlineArrayBytes == 155
+        && result.pendingXModelSkeleton->unresolvedFields == 0
+        && result.decodedAssetBytes == 252 + 6 + 155,
+        "XModel skeleton preview reads ordered inline children without Win32 pointer casts");
+
+    auto referencedModel = modelPayload;
+    Put32(referencedModel, modelStart + 8, 0x80000029u); // Previously stored bone array.
+    load(referencedModel, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->unresolvedFields == 1u
+        && result.pendingXModelSkeleton->boneNameBytes.empty()
+        && result.decodedAssetBytes == 252,
+        "referenced bone array remains unresolved without consuming FILE data");
 
     auto invalidModel = modelPayload;
     invalidModel[modelStart + 5] = 9; // More root bones than total bones.

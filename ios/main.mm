@@ -265,6 +265,19 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
             static_cast<int>(model.numLods),
             static_cast<int>(model.numCollisionSurfaces),
             fixed.Total() / 1024.0];
+        if (prefix.pendingXModelSkeleton)
+        {
+            const auto& skel = *prefix.pendingXModelSkeleton;
+            NSString* displayName = skel.name.empty() ? @"(no disponible)"
+                : [NSString stringWithUTF8String:skel.name.c_str()];
+            if (!displayName) displayName = @"(nombre no UTF-8)";
+            [text appendFormat:@"Nombre: %@\nBytes de esqueleto leídos: %llu\n"
+                "Huesos con identificadores locales: %zu\n"
+                "Hijos con referencias externas: 0x%X\n",
+                displayName,
+                static_cast<unsigned long long>(skel.inlineArrayBytes),
+                skel.boneNameBytes.size() / 2, skel.unresolvedFields];
+        }
     }
     [text appendString:@"\nLos shaders aún no se ejecutan en la GPU. El contenido todavía no está integrado en una partida."];
     return text;
