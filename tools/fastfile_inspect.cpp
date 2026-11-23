@@ -1,5 +1,6 @@
 #include <database/fastfile_inspection.h>
 #include <database/fastfile_assets.h>
+#include <platform/bo1_texture_bc.h>
 #include <inttypes.h>
 #include <cstdio>
 #include <cstring>
@@ -172,6 +173,23 @@ int main(int argc, char** argv)
                                 " resource bytes %" PRId32 " (pixel payload unread)\n",
                                 unsigned(image.loadDefLevels), unsigned(image.loadDefFlags),
                                 image.loadDefFormat, image.loadDefResourceSize);
+                        if (image.inlineLoadDefHeader)
+                        {
+                            std::printf("First inline GfxImageLoadDef format name %s\n",
+                                bo1::texture::FormatName(
+                                    static_cast<std::uint32_t>(image.loadDefFormat)));
+                            if (static_cast<std::uint32_t>(image.loadDefFormat)
+                                == bo1::texture::DXT3)
+                            {
+                                std::size_t bc2Size = 0, rgbaSize = 0;
+                                if (bo1::texture::BC2ByteSizes(
+                                    image.width, image.height, bc2Size, rgbaSize))
+                                    std::printf("First inline GfxImageLoadDef DXT3/BC2 expected compressed bytes %zu RGBA8 bytes %zu\n",
+                                        bc2Size, rgbaSize);
+                            }
+                            if (!image.loadDefResourceSize && image.streaming)
+                                std::printf("First inline GfxImageLoadDef streaming image has zero inline pixel bytes; pixel source still unknown.\n");
+                        }
                         if (image.loadDefInsertedAlias)
                             std::printf("First inline GfxImageLoadDef inserted 4-byte block-4 alias slot (-2 tag).\n");
                         else if (image.loadDefPending)

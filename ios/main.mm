@@ -6,6 +6,7 @@
 #include <database/fastfile_assets.h>
 #include <database/db_xmodel_header.h>
 #include <database/db_xsurface_header.h>
+#include <platform/bo1_texture_bc.h>
 #include <platform/bo1_bytecode_io.h>
 #include <clientscript/cscr_bytecode.h>
 #include <steam/steam_api.h>
@@ -117,6 +118,25 @@ static bool CheckNativeComponents(std::string& error)
             surface, bo1::fastfile::XSurfaceDiskHeaderSize, surfaceHeader))
     {
         error = "Invalid XSurface blend counts were accepted";
+        return false;
+    }
+
+    // Native BC2/Direct3D DXT3 CPU decode. iOS cannot consume the original
+    // D3D9 texture object, but can use RGBA8 pixels once the compressed
+    // texture bytes are available from the user's own assets.
+    unsigned char bc2Block[16]{};
+    for (size_t i = 0; i < 8; ++i) bc2Block[i] = 0xff;
+    bo1::bytecode::Store<std::uint16_t>(bc2Block + 8, 0xf800);
+    bo1::bytecode::Store<std::uint16_t>(bc2Block + 10, 0xf800);
+    std::vector<std::uint8_t> bc2Output;
+    if (std::strcmp(bo1::texture::FormatName(861165636u), "DXT3 / BC2") != 0
+        || !bo1::texture::DecodeBC2RGBA(
+            bc2Block, sizeof(bc2Block), 4, 4, bc2Output)
+        || bc2Output.size() != 64 || bc2Output[0] != 255
+        || bc2Output[1] != 0 || bc2Output[2] != 0
+        || bc2Output[3] != 255)
+    {
+        error = "Direct3D DXT3 / BC2 texture CPU decoding failed on ARM64";
         return false;
     }
 

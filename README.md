@@ -102,7 +102,18 @@ A -2 pointer reserves one 4-byte block-4 alias slot without consuming extra
 compressed FILE bytes, following DB_InsertPointer in the original loader.
 Neither path reads or allocates pixel payload bytes. Inline water payloads,
 texture constants, state bits and other Material children remain unresolved.
-No texture is uploaded to a GPU. Shader execution and physics integration are pending.
+No texture is uploaded to a GPU.
+
+The first real streaming image `~-gt5_foliage_desert_brush02_c` has
+512x512 dimensions with GfxTextureLoad=-2, texture resource length 0 and
+Direct3D format 861165636 (= FourCC `DXT3`, BC2). A zero-length inline
+resource is not a corrupted format; the actual pixel source remains unknown.
+The standalone `bo1::texture::DecodeBC2RGBA` CPU decoder can turn a
+properly sized BC2 block buffer into RGBA8 with bounded output, clipped
+edge blocks, and four-bit alpha. For 512x512 BC2 this would require
+262,144 compressed bytes and yield 1,048,576 RGBA8 bytes. This decoding
+is covered by independent CTest fixtures and an ARM64 iOS native self-test.
+It cannot reconstruct missing streamed pixels and does not render a scene. Shader execution and physics integration are pending.
 `AssetPrefix::pendingXModel` retains the counts, tags and four LOD descriptors
 without casting serialized pointers to ARM64 pointers. The iOS inspector
 reports these values and an estimate of fixed-size inline child arrays.
