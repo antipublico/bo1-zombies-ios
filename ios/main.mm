@@ -966,7 +966,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
             // In the single-object preview the root child owns the geometry.
             // In the staged scene a transform anchor owns one geometry child.
             // Do not treat that valid parent anchor as an empty/blank scene.
-            const bool hasGeometry = showSceneFixturePreview
+            const bool hasGeometry = (showSceneFixturePreview || showExploreFixturePreview)
                 ? first.childNodes.firstObject.geometry != nil
                 : first.geometry != nil;
             const bool rendered = success && self.sceneView.scene &&
@@ -1008,6 +1008,10 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                 markerName = @"bo1-scene-preview.json";
             }
         }
+        // On a staged-scene failure, write the requested first-person marker
+        // immediately instead of leaving CI to time out without a diagnosis.
+        if (showExploreFixturePreview && ![report[@"status"] isEqualToString:@"pass"])
+            markerName = @"bo1-explore-preview.json";
         NSData* json = [NSJSONSerialization dataWithJSONObject:report
             options:NSJSONWritingPrettyPrinted error:nullptr];
         NSString* marker = [NSTemporaryDirectory() stringByAppendingPathComponent:markerName];
