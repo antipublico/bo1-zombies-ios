@@ -242,6 +242,7 @@ def main():
         if (pack_report is None or pack_report.get("status") != "pass"
                 or pack_report.get("mode") != "compact-scene"
                 or pack_report.get("mesh_count") != 2
+                or pack_report.get("texture_count") != 2
                 or pack_report.get("walking_button") is not True
                 or pack_report.get("scrollable") is not True):
             raise RuntimeError(f"Compact scene import or walking UI failed: {pack_report}")
