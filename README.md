@@ -311,3 +311,32 @@ the same UIDocumentPicker callback as the real app, checks the walking button
 and scroll container and uploads scene-pack-preview.json/png. Device screen
 size may differ from the simulator; the iPhone SE 2020 layout needs physical
 verification by the owner. Never commit game binaries or Apple credentials.
+
+
+### Windows automatic folder mode (experimental)
+
+Instead of selecting every asset, the Windows GUI now has a prominent
+**AUTOMATICO: ANALIZAR CARPETA DEL JUEGO** action. Select the game installation
+directory once, then choose where to save the resulting .bo1scene package.
+The program scans up to 40,000 files, prioritizes smaller zombie_*.ff zones
+when present, attempts the current first-XModel LOD0 extraction (at most 80
+FastFiles), finds original .iwi textures both loose and inside .iwd ZIP
+archives, and unpacks compatible stored/Deflate texture data locally without
+a separate extractor. All 18 Windows CTests pass, including stored/Deflate
+synthetic IWD extraction, CRC verification, pack roundtrip and malformed data.
+
+**Important fidelity limitation:** this is currently an automatic
+*asset-preview-pack exporter*, NOT a complete original Zombies room/map
+extractor. The original world position, terrain, structural surfaces,
+static-model placements, per-surface material bindings and GfxWorld content
+are still unavailable in the current FastFile loader. The export therefore
+contains at most one successfully decoded XModel and one BC2 texture, with
+a clearly labeled tentative material association. The iOS diagnostic still
+uses synthetic placements; it does NOT claim to recreate a true map area.
+Some installations may not contain any compatible XModel/BC2 pair, in which
+case the program prints the reason and does not fabricate geometry.
+
+A genuinely original map subsection requires extending the FF parser to
+GfxWorld/ComWorld and original placement/material references and validating
+those fields against assets available only in the user's local installation.
+No original game binaries are committed to this public repository.
