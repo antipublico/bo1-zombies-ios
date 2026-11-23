@@ -495,7 +495,54 @@ private:
             material.name.assign(name);
         }
         if (!Charge(sizeof(XMaterialHeaderPreview))) return false;
+        // A recursive inline MaterialTechniqueSet is serialized before the
+        // texture table, so parsing beyond this point would misalign FILE.
+        if (material.techniqueSetTag == UINT32_MAX
+            || material.techniqueSetTag == UINT32_MAX - 1)
+        {
+            material.nestedTechniqueSetPending = true;
+        }
+        else if (!MaterialTextureHeaders(material))
+            return false;
         preview.firstInlineMaterial = std::move(material);
+        return true;
+    }
+
+    bool MaterialTextureHeaders(XMaterialHeaderPreview& material)
+    {
+        if (!material.textureTableTag) return true;
+        if (material.textureTableTag != UINT32_MAX)
+        {
+            material.textureTableReferenced = true;
+            return true;
+        }
+        // Load_MaterialTextureDefArray first reads N contiguous 16-byte
+        // records, then loops over GfxImagePtr/water_t children. Stop before
+        // the latter: they may recursively load textures and image payloads.
+        const size_t count = material.textureCount;
+        const size_t bytes = count * 16;
+        if (!AdvanceBlock(bytes, 4)
+            || !Charge(bytes + count * sizeof(XMaterialTexturePreview)))
+            return false;
+        std::vector<unsigned char> disk(bytes);
+        if (bytes && !Read(disk.data(), bytes)) return false;
+        material.textureHeaders.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            const unsigned char* entry = disk.data() + i * 16;
+            XMaterialTexturePreview texture{};
+            texture.nameHash = bytecode::Load<uint32_t>(entry);
+            texture.nameStart = entry[4];
+            texture.nameEnd = entry[5];
+            texture.samplerState = entry[6];
+            texture.semantic = entry[7];
+            texture.mature = entry[8];
+            texture.imageOrWaterTag = bytecode::Load<uint32_t>(entry + 12);
+            if (texture.imageOrWaterTag)
+                material.textureChildrenPending = true;
+            material.textureHeaders.push_back(texture);
+        }
+        material.textureHeaderBytes = bytes;
         return true;
     }
 

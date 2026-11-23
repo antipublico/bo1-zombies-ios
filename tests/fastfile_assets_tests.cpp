@@ -346,6 +346,14 @@ int main()
     const char materialName[] = "t5_foliage";
     materialWithHeader.insert(materialWithHeader.end(), materialName,
         materialName + sizeof(materialName));
+    const size_t textureOffset = materialWithHeader.size();
+    materialWithHeader.insert(materialWithHeader.end(), 2 * 16, 0);
+    Put32(materialWithHeader, textureOffset, 0xD0E0F00Du);
+    materialWithHeader[textureOffset + 6] = 7; // sampler.
+    materialWithHeader[textureOffset + 7] = 2; // semantic.
+    Put32(materialWithHeader, textureOffset + 12, UINT32_MAX); // inline image.
+    materialWithHeader[textureOffset + 16 + 7] = 11; // water semantic.
+    Put32(materialWithHeader, textureOffset + 16 + 12, 0x80000029u);
     Put32(materialWithHeader, 0,
         static_cast<uint32_t>(materialWithHeader.size() - 36));
     Put32(materialWithHeader, 8, 252 + 192); // Nested TEMP Material header.
@@ -363,7 +371,16 @@ int main()
         && result.pendingXModelSkeleton->firstInlineMaterial->stateBitsCount == 4
         && result.pendingXModelSkeleton->firstInlineMaterial->techniqueSetTag == 0x80000011u
         && result.pendingXModelSkeleton->firstInlineMaterial->textureTableTag == UINT32_MAX
-        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName),
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders.size() == 2
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaderBytes == 32
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureChildrenPending
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[0].nameHash == 0xD0E0F00Du
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[0].samplerState == 7
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[0].semantic == 2
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[0].imageOrWaterTag == UINT32_MAX
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[1].semantic == 11
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[1].imageOrWaterTag == 0x80000029u
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32,
         "opt-in Material header preview retains name and serialized pointer tags");
     auto truncatedMaterial = materialWithHeader;
     truncatedMaterial.resize(materialOffset + 191);
@@ -374,15 +391,34 @@ int main()
         "truncated nested Material header publishes no partial model");
     auto materialNoName = materialWithHeader;
     Put32(materialNoName, materialOffset, 0);
-    materialNoName.resize(materialOffset + 192);
+    materialNoName.resize(materialOffset + 192 + 32);
     Put32(materialNoName, 0,
         static_cast<uint32_t>(materialNoName.size() - 36));
     load(materialNoName, InspectionResult::Ok, deep);
     Check(result.pendingXModelSkeleton
         && result.pendingXModelSkeleton->firstInlineMaterial
         && result.pendingXModelSkeleton->firstInlineMaterial->name.empty()
-        && result.decodedAssetBytes == 252 + 816 + 48 + 192,
-        "nested Material with null name consumes only its fixed header");
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + 32,
+        "nested Material with null name preserves consecutive texture headers");
+
+    auto truncatedTextures = materialWithHeader;
+    truncatedTextures.pop_back();
+    Put32(truncatedTextures, 0,
+        static_cast<uint32_t>(truncatedTextures.size() - 36));
+    load(truncatedTextures, InspectionResult::InvalidFormat, deep);
+    Check(!result.pendingXModelSkeleton,
+        "truncated nested MaterialTextureDef array publishes no preview");
+    auto inlineTechnique = materialWithHeader;
+    Put32(inlineTechnique, materialOffset + 176, UINT32_MAX);
+    inlineTechnique.resize(textureOffset);
+    Put32(inlineTechnique, 0,
+        static_cast<uint32_t>(inlineTechnique.size() - 36));
+    load(inlineTechnique, InspectionResult::Ok, deep);
+    Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->nestedTechniqueSetPending
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders.empty()
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName),
+        "inline TechniqueSet blocks reading subsequent Material texture headers");
 
     auto truncatedHandles = modelPayload;
     truncatedHandles.pop_back();

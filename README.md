@@ -91,8 +91,10 @@ nested inline vertex/index/rigid-list/collision-tree payloads into CPU-only
 buffers. It then reads the original MaterialHandle pointer-slot table and
 classifies inline/shared/empty Win32 tags. The Windows CLI also opts into a
 strictly bounded 192-byte preview of the first inline Material header and
-its name, while leaving its technique, texture, constant and state-bits
-children unresolved. Shader execution and physics integration are pending.
+its name. If its technique set is not nested inline, the inspector also
+reads the fixed 16-byte MaterialTextureDef records and reports each texture
+semantic and serialized GfxImage/water pointer. Nested images, water payloads,
+texture constants, state bits and other Material children remain unresolved. Shader execution and physics integration are pending.
 `AssetPrefix::pendingXModel` retains the counts, tags and four LOD descriptors
 without casting serialized pointers to ARM64 pointers. The iOS inspector
 reports these values and an estimate of fixed-size inline child arrays.

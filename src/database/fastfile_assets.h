@@ -40,6 +40,17 @@ struct XSurfaceBodyPreview
 
 // Diagnostic-only snapshot of the first inline Material header nested in an
 // XModel. Child pointers/tables remain serialized tags, never native pointers.
+struct XMaterialTexturePreview
+{
+    uint32_t nameHash = 0;
+    uint32_t imageOrWaterTag = 0;
+    uint8_t nameStart = 0;
+    uint8_t nameEnd = 0;
+    uint8_t samplerState = 0;
+    uint8_t semantic = 0;
+    uint8_t mature = 0;
+};
+
 struct XMaterialHeaderPreview
 {
     size_t slot = 0;
@@ -59,6 +70,13 @@ struct XMaterialHeaderPreview
     uint8_t stateFlags = 0;
     uint8_t cameraRegion = 0;
     uint8_t maxStreamedMips = 0;
+    // Only the fixed, consecutive TextureDefArray records are decoded.
+    // Their image/water children may follow in FILE and remain unresolved.
+    std::vector<XMaterialTexturePreview> textureHeaders;
+    uint64_t textureHeaderBytes = 0;
+    bool nestedTechniqueSetPending = false;
+    bool textureChildrenPending = false;
+    bool textureTableReferenced = false;
 };
 
 struct XModelSkeletonPreview

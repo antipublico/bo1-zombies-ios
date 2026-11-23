@@ -135,7 +135,21 @@ int main(int argc, char** argv)
                         " stateBits 0x%08" PRIx32 "\n",
                         material.techniqueSetTag, material.textureTableTag,
                         material.constantTableTag, material.stateBitsTableTag);
-                    std::printf("First inline Material is a header-only diagnostic, nested resources unresolved.\n");
+                    std::printf("First inline Material texture records %zu bytes %" PRIu64
+                        " pending images/water %s inline techset pending %s shared table %s\n",
+                        material.textureHeaders.size(), material.textureHeaderBytes,
+                        material.textureChildrenPending ? "yes" : "no",
+                        material.nestedTechniqueSetPending ? "yes" : "no",
+                        material.textureTableReferenced ? "yes" : "no");
+                    for (size_t i = 0; i < material.textureHeaders.size() && i < 24; ++i)
+                    {
+                        const auto& texture = material.textureHeaders[i];
+                        std::printf("First inline Material texture %zu nameHash 0x%08" PRIx32
+                            " semantic %u sampler %u image/water tag 0x%08" PRIx32 "\n",
+                            i, texture.nameHash, unsigned(texture.semantic),
+                            unsigned(texture.samplerState), texture.imageOrWaterTag);
+                    }
+                    std::printf("First inline Material is a CPU-only diagnostic; image and shader resources remain unresolved.\n");
                 }
                 for (size_t i = 0; i < skel.surfaceHeaders.size() && i < 12; ++i)
                 {
