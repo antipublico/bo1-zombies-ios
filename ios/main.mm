@@ -10,6 +10,7 @@
 #include <platform/bo1_texture_bc.h>
 #include <platform/bo1_iwi_image.h>
 #include <platform/bo1_model_mesh.h>
+#include <platform/bo1_scene_layout.h>
 #include <platform/bo1_bytecode_io.h>
 #include <clientscript/cscr_bytecode.h>
 #include <steam/steam_api.h>
@@ -33,6 +34,7 @@ static bool runSelfTest = false;
 static bool showFixturePreview = false;
 static bool showIwiFixturePreview = false;
 static bool showModelFixturePreview = false;
+static bool showSceneFixturePreview = false;
 
 // Four large, uniform BC2 quadrants make screenshot sampling independent of
 // scaling/filtering at block boundaries. No original game pixels are used.
@@ -264,6 +266,83 @@ static SCNScene* SceneForMesh(const bo1::model::Mesh& mesh, UIImage* texture)
     camera.position = SCNVector3Make(x + radius * 1.3f,
         y + radius * 0.9f, z + radius * 2.2f);
     [camera lookAt:SCNVector3Make(x, y, z)];
+    [scene.rootNode addChildNode:camera];
+    return scene;
+}
+
+// A diagnostic *staged* environment, not a recovered BO1 map. The user can
+// import up to six different FF files: each currently yields only its first
+// inline LOD0 XModel, which is then instanced across a simple synthetic floor.
+// Shared SCNGeometry buffers limit memory while the user's single chosen IWI
+// is applied to all mesh sources until per-material texture lookup exists.
+static SCNScene* SceneForArrangement(
+    const std::vector<std::shared_ptr<bo1::model::Mesh>>& meshes,
+    UIImage* texture)
+{
+    if (!texture || meshes.empty() || meshes.size() > bo1::scene::MaxSources)
+        return nil;
+    std::vector<bo1::scene::Placement> layout;
+    float span = 0.5f, tallest = 0.5f;
+    for (const auto& mesh : meshes)
+    {
+        if (!mesh || mesh->vertices.empty() || mesh->indices.empty())
+            return nil;
+        span = std::max(span, std::max(
+            mesh->maxs[0] - mesh->mins[0], mesh->maxs[2] - mesh->mins[2]));
+        tallest = std::max(tallest, mesh->maxs[1] - mesh->mins[1]);
+    }
+    span = std::min(9000.f, std::max(span, tallest * 0.45f));
+    if (!bo1::scene::BuildPlacements(meshes.size(), 9, span * 1.4f, layout))
+        return nil;
+
+    NSMutableArray<SCNGeometry*>* geometries = [NSMutableArray arrayWithCapacity:meshes.size()];
+    for (const auto& mesh : meshes)
+    {
+        SCNScene* prototype = SceneForMesh(*mesh, texture);
+        SCNGeometry* geometry = prototype.rootNode.childNodes.firstObject.geometry;
+        if (!geometry) return nil;
+        [geometries addObject:geometry];
+    }
+    SCNScene* scene = [SCNScene scene];
+    scene.background.contents = UIColor.secondarySystemBackgroundColor;
+    for (std::size_t i = 0; i < layout.size(); ++i)
+    {
+        const auto& instance = layout[i];
+        const auto& mesh = *meshes[instance.sourceIndex];
+        SCNNode* anchor = [SCNNode node];
+        anchor.name = [NSString stringWithFormat:@"BO1 scene instance %zu", i];
+        anchor.position = SCNVector3Make(instance.x, 0, instance.z);
+        anchor.eulerAngles = SCNVector3Make(0, instance.yawRadians, 0);
+        anchor.scale = SCNVector3Make(instance.scale, instance.scale, instance.scale);
+        SCNNode* child = [SCNNode nodeWithGeometry:geometries[instance.sourceIndex]];
+        // Each mesh is centered on its own base, not positioned with any real
+        // BO1 world/map spawn coordinates.
+        child.position = SCNVector3Make(
+            -(mesh.mins[0] + mesh.maxs[0]) * .5f,
+            -mesh.mins[1],
+            -(mesh.mins[2] + mesh.maxs[2]) * .5f);
+        [anchor addChildNode:child];
+        [scene.rootNode addChildNode:anchor];
+    }
+    SCNFloor* floor = [SCNFloor floor];
+    floor.reflectivity = 0;
+    SCNMaterial* floorMat = [SCNMaterial material];
+    floorMat.diffuse.contents = [UIColor colorWithRed:0.17 green:0.19 blue:0.17 alpha:1];
+    floorMat.lightingModelName = SCNLightingModelConstant;
+    floor.materials = @[floorMat];
+    SCNNode* ground = [SCNNode nodeWithGeometry:floor];
+    ground.name = @"BO1 staging floor";
+    ground.position = SCNVector3Make(0, -0.06f * tallest, 0);
+    [scene.rootNode addChildNode:ground];
+    SCNNode* camera = [SCNNode node];
+    camera.name = @"BO1 preview camera";
+    camera.camera = [SCNCamera camera];
+    camera.camera.fieldOfView = 57;
+    camera.camera.zNear = 0.02;
+    camera.camera.zFar = std::max(150.0, double(span) * 35.0);
+    camera.position = SCNVector3Make(span * 1.8f,
+        std::max(span * 2.3f, tallest * 2.2f), span * 3.3f);
+    [camera lookAt:SCNVector3Make(0, tallest * 0.55f, 0)];
     [scene.rootNode addChildNode:camera];
     return scene;
 }
@@ -651,6 +730,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 @interface BO1ViewController : UIViewController <UIDocumentPickerDelegate>
 {
     std::shared_ptr<bo1::model::Mesh> _modelMesh;
+    std::vector<std::shared_ptr<bo1::model::Mesh>> _sceneMeshes;
 }
 @property(nonatomic, strong) UIButton* selectButton;
 @property(nonatomic, strong) UIButton* selectIwiButton;
@@ -658,7 +738,11 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 @property(nonatomic, strong) SCNView* sceneView;
 @property(nonatomic, strong) UIImage* modelTexture;
 @property(nonatomic, strong) UIButton* togglePreviewButton;
+@property(nonatomic, strong) UIButton* toggleSceneButton;
+@property(nonatomic, strong) UIButton* addModelButton;
 @property(nonatomic) BOOL showModel;
+@property(nonatomic) BOOL showScene;
+@property(nonatomic) BOOL appendNextModel;
 @property(nonatomic, strong) UILabel* stateLabel;
 @property(nonatomic, strong) UITextView* resultView;
 @property(nonatomic, strong) UIActivityIndicatorView* activity;
@@ -694,6 +778,14 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     buttonConfiguration.cornerStyle = UIButtonConfigurationCornerStyleMedium;
     self.selectButton.configuration = buttonConfiguration;
     [self.selectButton addTarget:self action:@selector(selectFastfile:) forControlEvents:UIControlEventTouchUpInside];
+
+    self.addModelButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIButtonConfiguration* addModelConfig = [UIButtonConfiguration tintedButtonConfiguration];
+    addModelConfig.title = @"Añadir otro modelo .ff";
+    self.addModelButton.configuration = addModelConfig;
+    self.addModelButton.hidden = YES;
+    [self.addModelButton addTarget:self action:@selector(addModelFromFastfile:)
+        forControlEvents:UIControlEventTouchUpInside];
 
     self.selectIwiButton = [UIButton buttonWithType:UIButtonTypeSystem];
     UIButtonConfiguration* iwiButton = [UIButtonConfiguration tintedButtonConfiguration];
@@ -737,6 +829,14 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     [self.togglePreviewButton addTarget:self action:@selector(toggleModelPreview:)
         forControlEvents:UIControlEventTouchUpInside];
 
+    self.toggleSceneButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIButtonConfiguration* toggleSceneConfig = [UIButtonConfiguration tintedButtonConfiguration];
+    toggleSceneConfig.title = @"Ver escena (9 plantas)";
+    self.toggleSceneButton.configuration = toggleSceneConfig;
+    self.toggleSceneButton.hidden = YES;
+    [self.toggleSceneButton addTarget:self action:@selector(toggleScenePreview:)
+        forControlEvents:UIControlEventTouchUpInside];
+
     self.stateLabel = [[UILabel alloc] init];
     self.stateLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
     self.stateLabel.adjustsFontForContentSizeCategory = YES;
@@ -746,6 +846,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     self.stateLabel.text = nativeReady ? @"Componentes nativos listos." : @"Falló la comprobación de los componentes.";
     self.selectButton.enabled = nativeReady;
     self.selectIwiButton.enabled = nativeReady;
+    self.addModelButton.enabled = nativeReady;
 
     self.activity = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     self.activity.hidesWhenStopped = YES;
@@ -766,9 +867,9 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
         : [NSString stringWithUTF8String:nativeError.c_str()];
 
     UIStackView* content = [[UIStackView alloc] initWithArrangedSubviews:
-        @[title, detail, self.selectButton, self.selectIwiButton,
-          status, self.sceneView, self.textureView, self.togglePreviewButton,
-          self.resultView]];
+        @[title, detail, self.selectButton, self.addModelButton,
+          self.selectIwiButton, status, self.sceneView, self.textureView,
+          self.togglePreviewButton, self.toggleSceneButton, self.resultView]];
     content.axis = UILayoutConstraintAxisVertical;
     content.spacing = 12;
     content.translatesAutoresizingMaskIntoConstraints = NO;
@@ -800,15 +901,27 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 - (void)viewDidAppear:(BOOL)animated
 {
     [super viewDidAppear:animated];
-    if ((!showIwiFixturePreview && !showModelFixturePreview) || self.iwiFixtureStarted) return;
+    if ((!showIwiFixturePreview && !showModelFixturePreview &&
+         !showSceneFixturePreview) || self.iwiFixtureStarted) return;
     self.iwiFixtureStarted = YES;
     // A fixed white backing makes the alpha-compositing assertion deterministic
     // in either appearance. The normal document picker retains its styling.
     self.textureView.backgroundColor = UIColor.whiteColor;
-    if (showModelFixturePreview)
+    if (showModelFixturePreview || showSceneFixturePreview)
     {
         _modelMesh = SyntheticCrossedPlanes();
+        _sceneMeshes.push_back(_modelMesh);
         self.showModel = YES;
+    }
+    if (showSceneFixturePreview)
+    {
+        auto second = std::make_shared<bo1::model::Mesh>(*_modelMesh);
+        second->name = "synthetic alternate foliage";
+        for (auto& vertex : second->vertices) vertex.y *= 0.7f;
+        second->maxs[1] *= 0.7f;
+        second->mins[1] *= 0.7f;
+        _sceneMeshes.push_back(std::move(second));
+        self.showScene = YES;
     }
     self.iwiFixtureURL = [NSURL fileURLWithPath:[NSTemporaryDirectory()
         stringByAppendingPathComponent:@"bo1-synthetic-preview.iwi"]];
@@ -831,7 +944,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
         NSDictionary* report = success ? IwiFixtureLayoutReport(self.textureView)
             : @{@"status": @"fail", @"error": self.resultView.text ?: @"Fixture read failed"};
         NSString* markerName = @"bo1-iwi-preview.json";
-        if (showModelFixturePreview)
+        if (showModelFixturePreview || showSceneFixturePreview)
         {
             const bool rendered = success && self.sceneView.scene &&
                 !self.sceneView.hidden && self.sceneView.pointOfView &&
@@ -846,6 +959,30 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                     @"width": @(self.sceneView.bounds.size.width)}
                 : @{@"status": @"fail", @"error": @"SceneKit model preview not visible"};
             markerName = @"bo1-model-preview.json";
+            if (showSceneFixturePreview)
+            {
+                std::size_t instanceCount = 0;
+                BOOL hasGround = NO;
+                for (SCNNode* node in self.sceneView.scene.rootNode.childNodes)
+                {
+                    if ([node.name hasPrefix:@"BO1 scene instance "] && node.childNodes.count == 1
+                        && node.childNodes.firstObject.geometry)
+                        ++instanceCount;
+                    if ([node.name isEqualToString:@"BO1 staging floor"] && node.geometry)
+                        hasGround = YES;
+                }
+                const bool good = rendered && instanceCount == 9 && hasGround
+                    && _sceneMeshes.size() == 2;
+                report = good
+                    ? @{@"status": @"pass", @"renderer": @"SceneKit",
+                        @"source_meshes": @2, @"instances": @(instanceCount),
+                        @"has_ground": @YES,
+                        @"height": @(self.sceneView.bounds.size.height),
+                        @"width": @(self.sceneView.bounds.size.width)}
+                    : @{@"status": @"fail", @"error": @"Scene layout, floor or model instances missing",
+                        @"instances": @(instanceCount)};
+                markerName = @"bo1-scene-preview.json";
+            }
         }
         NSData* json = [NSJSONSerialization dataWithJSONObject:report
             options:NSJSONWritingPrettyPrinted error:nullptr];
@@ -857,8 +994,12 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 
 - (void)refresh3DPreview
 {
-    const bool ready = _modelMesh && self.modelTexture;
+    const bool hasMesh = _modelMesh != nullptr;
+    const bool ready = hasMesh && self.modelTexture != nil;
+    self.addModelButton.hidden = !hasMesh;
+    self.addModelButton.enabled = _sceneMeshes.size() < bo1::scene::MaxSources;
     self.togglePreviewButton.hidden = !ready;
+    self.toggleSceneButton.hidden = !ready;
     if (!ready)
     {
         self.sceneView.hidden = YES;
@@ -868,7 +1009,14 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     }
     if (!self.sceneView.scene)
     {
-        SCNScene* scene = SceneForMesh(*_modelMesh, self.modelTexture);
+        SCNScene* scene = self.showScene
+            ? SceneForArrangement(_sceneMeshes, self.modelTexture)
+            : SceneForMesh(*_modelMesh, self.modelTexture);
+        if (!scene)
+        {
+            self.stateLabel.text = @"No fue posible generar la escena 3D.";
+            return;
+        }
         self.sceneView.scene = scene;
         SCNNode* camera = [scene.rootNode childNodeWithName:@"BO1 preview camera"
             recursively:NO];
@@ -880,14 +1028,36 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     UIButtonConfiguration* config = self.togglePreviewButton.configuration;
     config.title = show3D ? @"Ver textura plana" : @"Ver modelo 3D";
     self.togglePreviewButton.configuration = config;
+    UIButtonConfiguration* sceneConfig = self.toggleSceneButton.configuration;
+    sceneConfig.title = self.showScene
+        ? @"Ver modelo individual" : @"Ver escena (9 plantas)";
+    self.toggleSceneButton.configuration = sceneConfig;
     if (show3D)
-        self.stateLabel.text = @"Vista 3D: XModel real + textura IWI (giralo con el dedo).";
+        self.stateLabel.text = self.showScene
+            ? [NSString stringWithFormat:@"Escena de diagnóstico: 9 plantas, %zu modelo(s) .ff. Girala con el dedo.",
+                _sceneMeshes.size()]
+            : @"Vista 3D: XModel real + textura IWI (giralo con el dedo).";
 }
 
 - (void)toggleModelPreview:(id)sender
 {
     self.showModel = !self.showModel;
     [self refresh3DPreview];
+}
+
+- (void)toggleScenePreview:(id)sender
+{
+    self.showScene = !self.showScene;
+    self.showModel = YES;
+    self.sceneView.scene = nil;
+    [self refresh3DPreview];
+}
+
+- (void)addModelFromFastfile:(id)sender
+{
+    if (_sceneMeshes.size() >= bo1::scene::MaxSources) return;
+    self.appendNextModel = YES;
+    [self selectFastfile:sender];
 }
 
 - (void)selectFastfile:(id)sender
@@ -926,18 +1096,26 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
         return;
     }
 
+    const BOOL append = isFastfile && self.appendNextModel;
+    self.appendNextModel = NO;
     self.selectButton.enabled = NO;
+    self.addModelButton.enabled = NO;
     self.selectIwiButton.enabled = NO;
     if (isIwi)
     {
         self.textureView.image = nil;
         self.modelTexture = nil;
     }
-    else
+    else if (!append)
+    {
         _modelMesh.reset();
+        _sceneMeshes.clear();
+        self.showScene = NO;
+    }
     self.sceneView.scene = nil;
     self.sceneView.hidden = YES;
     self.togglePreviewButton.hidden = YES;
+    self.toggleSceneButton.hidden = YES;
     self.textureView.hidden = self.textureView.image == nil;
     self.stateLabel.text = isIwi ? @"Decodificando textura DXT3…" :
         @"Leyendo y comprobando el archivo…";
@@ -981,17 +1159,33 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                     self.modelTexture = success ? preview : nil;
                     self.textureView.image = self.modelTexture;
                 }
-                else
-                    _modelMesh = success ? capturedMesh : nullptr;
+                else if (success && capturedMesh)
+                {
+                    if (_sceneMeshes.size() < bo1::scene::MaxSources)
+                    {
+                        _modelMesh = capturedMesh;
+                        _sceneMeshes.push_back(capturedMesh);
+                    }
+                    else
+                    {
+                        text = [text stringByAppendingString:
+                            @"\n\nSe alcanzó el máximo de 6 modelos en la escena."];
+                    }
+                }
+                if (isFastfile && !capturedMesh && append)
+                    text = [text stringByAppendingString:
+                        @"\n\nNo se añadió otro modelo; se conservó la escena anterior."];
                 self.showModel = _modelMesh && self.modelTexture;
                 self.stateLabel.text = success
                     ? (isIwi ? @"Textura DXT3 reconstruida en iOS." : @"Comprobación completada.")
                     : (isIwi ? @"No se pudo abrir la textura." : @"El archivo no pudo validarse.");
                 self.selectButton.enabled = YES;
                 self.selectIwiButton.enabled = YES;
+                self.addModelButton.enabled = _sceneMeshes.size() < bo1::scene::MaxSources;
                 [self.activity stopAnimating];
                 [self refresh3DPreview];
-                if ((showIwiFixturePreview || showModelFixturePreview) && self.iwiFixtureURL)
+                if ((showIwiFixturePreview || showModelFixturePreview ||
+                    showSceneFixturePreview) && self.iwiFixtureURL)
                 {
                     if (success) self.stateLabel.text = @"Textura sintética DXT3: colores y transparencia.";
                     [self finishIwiFixture:success];
@@ -1071,6 +1265,7 @@ int main(int argc, char* argv[])
             showFixturePreview = showFixturePreview || std::strcmp(argv[index], "--fixture-preview") == 0;
             showIwiFixturePreview = showIwiFixturePreview || std::strcmp(argv[index], "--fixture-iwi-preview") == 0;
             showModelFixturePreview = showModelFixturePreview || std::strcmp(argv[index], "--fixture-model-preview") == 0;
+            showSceneFixturePreview = showSceneFixturePreview || std::strcmp(argv[index], "--fixture-scene-preview") == 0;
         }
         return UIApplicationMain(argc, argv, nil, NSStringFromClass(BO1AppDelegate.class));
     }

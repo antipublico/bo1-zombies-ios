@@ -59,3 +59,8 @@ See `.github/workflows/portable-ios.yml` for both iPhone device and simulator CI
 ## Update: first native 3D model viewer (2026-11-23)
 
 Code now includes `src/platform/bo1_model_mesh.h` for safe, CPU-owned first-XModel LOD0 geometry extracted from existing `LoadAssetPrefix` (T5 VU half-float UVs, XSurface packed xyz/u16 indexed triangles) and a SceneKit-based iPhone diagnostic viewer that binds the user-selected DXT3/BC2 IWI to its supported surfaces. The model and texture pickers may be used in either order. The native 3D view supports orbit touch gestures and a switch back to 2D. CI adds CTest `model_mesh`, a synthetic crossed-planes preview `--fixture-model-preview` and screenshot `model-preview.png`. See current branch Actions for outcomes; do not assume success until green. Material selection/texture mapping, full XModel registry, skinning, physics and game rendering are still future work.
+
+
+### Update: staged multi-model diagnostic scene
+
+The app now supports the 9-instance staged SceneKit layout from `src/platform/bo1_scene_layout.h` and bounded source meshes imported one `.ff` at a time (max 6). `Ver escena (9 plantas)` and `Ver modelo individual` toggle the scene; `Añadir otro modelo .ff` appends the first supported LOD0 model in another user-provided FastFile. Every source currently shares the manually selected IWI, and model placement/ground are *synthetic*, **not recovered BO1 map placements**. CI adds a `scene_layout` CTest and `--fixture-scene-preview` screenshot/marker `scene-preview.png/json` using only synthetic meshes. Check final Actions status before calling green. The first authentic physical-phone scene test remains up to the user.

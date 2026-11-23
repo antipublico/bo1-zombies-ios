@@ -162,7 +162,32 @@ def main():
         simctl("io", device_id, "screenshot", str(model_png))
         if not model_png.is_file() or model_png.stat().st_size < 5000:
             raise RuntimeError("3D model screenshot was not captured")
-        print("iOS native, IWI UI and 3D SceneKit UI checks passed; screenshots saved.",
+        # Nine instances (two synthetic source meshes) on a staged floor.
+        # This checks the scene graph on the simulator without any BO1 assets.
+        scene_marker = data_container / "tmp" / "bo1-scene-preview.json"
+        scene_marker.unlink(missing_ok=True)
+        simctl("launch", "--terminate-running-process", device_id, bundle_id,
+               "--fixture-scene-preview")
+        deadline = time.monotonic() + 60
+        scene_report = None
+        while time.monotonic() < deadline:
+            if scene_marker.is_file():
+                scene_report = json.loads(scene_marker.read_text(encoding="utf-8"))
+                break
+            time.sleep(0.25)
+        if (scene_report is None or scene_report.get("status") != "pass"
+                or scene_report.get("instances") != 9
+                or scene_report.get("source_meshes") != 2
+                or scene_report.get("has_ground") is not True):
+            raise RuntimeError(f"Staged multi-model scene failed: {scene_report}")
+        (args.output / "scene-preview.json").write_text(
+            json.dumps(scene_report, indent=2), encoding="utf-8")
+        time.sleep(3)
+        scene_png = args.output / "scene-preview.png"
+        simctl("io", device_id, "screenshot", str(scene_png))
+        if not scene_png.is_file() or scene_png.stat().st_size < 5000:
+            raise RuntimeError("No simulator screenshot for multi-model scene")
+        print("iOS native, IWI UI, 3D model and staged scene checks passed; screenshots saved.",
               flush=True)
     finally:
         simctl("shutdown", device_id, check=False)

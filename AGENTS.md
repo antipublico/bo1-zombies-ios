@@ -9,3 +9,6 @@ This file applies to the whole repository. **Start with [docs/CODEX_NEXT_STEP.md
 - Only use synthetic IWI/fastfile fixtures in commits, tests and screenshots. **Never push copyrighted game archives, `.ff`, `.iwd`, `.iwi`, real decoded texture previews or game assets.** Local user data stays local.
 - Do not request or publish Apple IDs, private signing keys, certificates, provisioning profiles, account tokens or secrets. An unsigned IPA from CI cannot be installed without a separate user-controlled signing process.
 - Work on real execution validation: iOS simulator UI screenshot of the texture, regression tests, CI diagnostics; physical-device testing only when a signing-capable device/workflow is actually available. Be precise about what was and was not tested.
+
+
+- Next milestone after the first physical-phone XModel+IWI render: a diagnostic **nine-instance staged scene**, combining up to six first-LOD0 meshes extracted from separate user-selected FF files. Placement and ground are synthetic, never described as BO1 map geometry. Check `docs/CODEX_NEXT_STEP.md` and fresh CI artifacts for `scene-preview.png`; keep PR draft and main untouched.
