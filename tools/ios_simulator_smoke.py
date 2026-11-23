@@ -21,15 +21,8 @@ def simctl(*arguments, timeout=120, check=True):
     return result
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("app", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    if not args.app.is_dir():
-        raise SystemExit(f"App bundle is missing: {args.app}")
-    args.output.mkdir(parents=True, exist_ok=True)
-
+def preferred_iphone():
+    """Use the same simulator model for early boot and the smoke runner."""
     inventory = json.loads(simctl("list", "devices", "available", "--json").stdout)
     candidates = [
         (runtime, device)
@@ -42,19 +35,38 @@ def main():
     ]
     if not candidates:
         raise RuntimeError("No available iPhone runtime is installed on this runner")
-    # Prefer the SE screen size when the installed runtime supports it.
     candidates.sort(key=lambda item: ("iPhone SE" not in item[1]["name"], item[1]["name"]))
-    runtime, template = candidates[0]
-    device_id = simctl(
-        "create", "BO1 CI", template["deviceTypeIdentifier"], runtime
-    ).stdout.strip()
+    return candidates[0]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("app", type=Path)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--prebooted-udid", type=Path,
+                        help="Simulator ID already booting while Xcode builds; optional")
+    args = parser.parse_args()
+    if not args.app.is_dir():
+        raise SystemExit(f"App bundle is missing: {args.app}")
+    args.output.mkdir(parents=True, exist_ok=True)
+
+    runtime, template = preferred_iphone()
+    if args.prebooted_udid is not None:
+        device_id = args.prebooted_udid.read_text(encoding="utf-8").strip()
+        if not device_id:
+            raise RuntimeError("Prebooted iPhone device ID is empty")
+    else:
+        device_id = simctl(
+            "create", "BO1 CI", template["deviceTypeIdentifier"], runtime
+        ).stdout.strip()
     bundle_id = "com.antipublico.bo1zombies.dev"
     (args.output / "device.json").write_text(
         json.dumps({"name": template["name"], "runtime": runtime, "udid": device_id}, indent=2)
     )
     print(f"Testing {template['name']} with {runtime}", flush=True)
     try:
-        simctl("boot", device_id)
+        if args.prebooted_udid is None:
+            simctl("boot", device_id)
         simctl("bootstatus", device_id, "-b", timeout=240)
         simctl("install", device_id, str(args.app.resolve()))
         data_container = Path(simctl(

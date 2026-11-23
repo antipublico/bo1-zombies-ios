@@ -64,3 +64,8 @@ Code now includes `src/platform/bo1_model_mesh.h` for safe, CPU-owned first-XMod
 ### Update: staged multi-model diagnostic scene
 
 The app now supports the 9-instance staged SceneKit layout from `src/platform/bo1_scene_layout.h` and bounded source meshes imported one `.ff` at a time (max 6). `Ver escena (9 plantas)` and `Ver modelo individual` toggle the scene; `Añadir otro modelo .ff` appends the first supported LOD0 model in another user-provided FastFile. Every source currently shares the manually selected IWI, and model placement/ground are *synthetic*, **not recovered BO1 map placements**. CI adds a `scene_layout` CTest and `--fixture-scene-preview` screenshot/marker `scene-preview.png/json` using only synthetic meshes. Check final Actions status before calling green. The first authentic physical-phone scene test remains up to the user.
+
+
+### Update: first-person staged scene and CI startup overlap
+
+Added `ios/bo1_explore_view.h/.mm`: a distinct fullscreen UIKit+SceneKit controller with four held directional buttons and pan-to-look camera. `ios/main.mm` offers the **Explorar caminando** button only in the 9-instance SceneKit layout. A synthetic `--fixture-explore-preview` run produces `explore-preview.png/json`; marker asserts presentation, camera and four controls but **does not emulate player gestures or original BO1 physics**. Changes to `tools/ios_simulator_boot.py`, `tools/ios_simulator_smoke.py` and workflow preboot the iPhone simulator during two Xcode builds, rather than after, with the objective of reducing total Actions time; measure the actual result. Do not claim all CI green until the new run completes.

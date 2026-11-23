@@ -12,3 +12,6 @@ This file applies to the whole repository. **Start with [docs/CODEX_NEXT_STEP.md
 
 
 - Next milestone after the first physical-phone XModel+IWI render: a diagnostic **nine-instance staged scene**, combining up to six first-LOD0 meshes extracted from separate user-selected FF files. Placement and ground are synthetic, never described as BO1 map geometry. Check `docs/CODEX_NEXT_STEP.md` and fresh CI artifacts for `scene-preview.png`; keep PR draft and main untouched.
+
+
+- Latest next milestone: diagnostic fullscreen SceneKit first-person camera (touch held arrows + pan-to-look) over **synthetic placements of real LOD0 models**. Original Zombies movement, gameplay and collisions are not implemented. Simulator preboot overlaps builds to reduce Actions duration; check fresh run and screenshots. Loading second XModel within the same FF is still blocked by unresolved recursive material/child stream serialization and cannot be skipped without decoding.

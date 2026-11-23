@@ -256,3 +256,11 @@ La aplicación puede **repetir el XModel LOD0 auténtico** ya extraído de un `.
 Opcionalmente, **«Añadir otro modelo .ff»** permite incorporar hasta **seis fuentes** (una malla extraída por cada archivo `.ff` seleccionado; todavía no se puede leer el segundo o tercer XModel de un mismo `.ff`). Las nueve instancias usan esas fuentes de forma alternada; por ahora todas comparten la textura IWI elegida manualmente. Se pueden cargar archivos `.ff` adicionales de manera consecutiva, pero no se guardan permanentemente en la app y ninguna fuente de juego se sube a GitHub. El selector principal **«Seleccionar archivo .ff»** inicia una escena nueva.
 
 CI incluye la prueba independiente y acotada `scene_layout`, un fixture visual de dos geometrías sintéticas y nueve instancias con suelo, además de una captura `scene-preview.png` de SceneKit. Para evaluar el resultado real sigue siendo necesaria una prueba en el dispositivo con archivos propios. No es un juego, nivel, mapa ni motor Zombies completo.
+
+## Exploración en primera persona (iOS, fase experimental)
+
+El escenario de diagnóstico con nueve instancias ahora incluye **«Explorar caminando»**. Desde la escena abierta, tocá el botón para entrar a una vista **a pantalla completa**: mantené presionadas las cuatro flechas para caminar y deslizá un dedo fuera de la cruceta para mirar alrededor. «Volver al visor» cierra la cámara de exploración. La velocidad y los límites de desplazamiento se ajustan a las dimensiones de las mallas importadas; el suelo y la distribución son inventados. **No hay físicas, colisiones, zombis, disparos ni movimiento del motor original de BO1.**
+
+La prueba de CI añade `--fixture-explore-preview`, que crea una escena artificial de dos mallas fuente, presenta la interfaz a pantalla completa, comprueba el nodo de cámara y los cuatro controles y guarda `explore-preview.png/json` (no realiza pruebas automatizadas de gestos reales). La app ARM64 sigue distribuyéndose sin firmar para instalación local con una cuenta de Apple del usuario.
+
+Para reducir esperas de CI, se inicia el simulador macOS en paralelo con la compilación iOS; el script `tools/ios_simulator_smoke.py` acepta opcionalmente `--prebooted-udid` y conserva el arranque independiente cuando ese parámetro no está.
