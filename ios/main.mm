@@ -946,10 +946,16 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
         NSString* markerName = @"bo1-iwi-preview.json";
         if (showModelFixturePreview || showSceneFixturePreview)
         {
+            SCNNode* first = self.sceneView.scene.rootNode.childNodes.firstObject;
+            // In the single-object preview the root child owns the geometry.
+            // In the staged scene a transform anchor owns one geometry child.
+            // Do not treat that valid parent anchor as an empty/blank scene.
+            const bool hasGeometry = showSceneFixturePreview
+                ? first.childNodes.firstObject.geometry != nil
+                : first.geometry != nil;
             const bool rendered = success && self.sceneView.scene &&
                 !self.sceneView.hidden && self.sceneView.pointOfView &&
-                self.sceneView.scene.rootNode.childNodes.firstObject.geometry &&
-                self.sceneView.bounds.size.width > 100 &&
+                hasGeometry && self.sceneView.bounds.size.width > 100 &&
                 self.sceneView.bounds.size.height > 100;
             report = rendered
                 ? @{@"status": @"pass", @"renderer": @"SceneKit",
@@ -980,7 +986,9 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                         @"height": @(self.sceneView.bounds.size.height),
                         @"width": @(self.sceneView.bounds.size.width)}
                     : @{@"status": @"fail", @"error": @"Scene layout, floor or model instances missing",
-                        @"instances": @(instanceCount)};
+                        @"instances": @(instanceCount), @"base_visible": @(rendered),
+                        @"has_ground": @(hasGround),
+                        @"mesh_sources": @(_sceneMeshes.size())};
                 markerName = @"bo1-scene-preview.json";
             }
         }
