@@ -8,6 +8,7 @@
 #include <steam/steam_api.h>
 #include <universal/narrow32.h>
 #include "../tests/native_asset_fixture.h"
+#include "../tests/techset_fixture.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -149,11 +150,13 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     size_t tables = 0;
     size_t cells = 0;
     size_t localizations = 0;
+    size_t techsets = 0;
     size_t emptyRoots = 0;
     for (const auto& entry : prefix.entries)
     {
         rawfiles += entry.rawfile != nullptr;
         localizations += entry.localize != nullptr;
+        techsets += entry.techniqueSet != nullptr;
         if (entry.stringTable != nullptr)
         {
             ++tables;
@@ -161,11 +164,12 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
                 cells += static_cast<size_t>(entry.stringTable->rowCount) *
                     static_cast<size_t>(entry.stringTable->columnCount);
         }
-        emptyRoots += entry.rawfile == nullptr && entry.stringTable == nullptr && entry.localize == nullptr;
+        emptyRoots += entry.rawfile == nullptr && entry.stringTable == nullptr
+            && entry.localize == nullptr && entry.techniqueSet == nullptr;
     }
     [text appendFormat:@"\nRecursos reconstruidos\nArchivos: %zu\nTablas: %zu\nCeldas: %zu\n"
-        "Entradas localizadas: %zu\nReferencias vacías: %zu\nProcesados: %zu de %zu\nMemoria contabilizada: %.2f KiB\n",
-        rawfiles, tables, cells, localizations, emptyRoots, prefix.entries.size(),
+        "Entradas localizadas: %zu\nConjuntos de shaders: %zu\nReferencias vacías: %zu\nProcesados: %zu de %zu\nMemoria contabilizada: %.2f KiB\n",
+        rawfiles, tables, cells, localizations, techsets, emptyRoots, prefix.entries.size(),
         inspection.assets.size(), prefix.nativeBytes / 1024.0];
     if (prefix.stop == bo1::fastfile::AssetStop::Complete)
         [text appendString:@"\nReconstrucción del directorio completada.\n"];
@@ -178,7 +182,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
         [text appendFormat:@"\nReconstrucción parcial. Detenida en índice %zu (base 0), %s: %@.\n"
             "Los recursos siguientes todavía no se reconstruyeron.\n", prefix.nextAsset, type, reason];
     }
-    [text appendString:@"\nEl contenido todavía no está integrado en una partida."];
+    [text appendString:@"\nLos shaders aún no se ejecutan en la GPU. El contenido todavía no está integrado en una partida."];
     return text;
 }
 
@@ -263,7 +267,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
         // the results UI without shipping or uploading any game content.
         NSString* path = [NSTemporaryDirectory() stringByAppendingPathComponent:
             [NSString stringWithFormat:@"bo1-preview-%@.ff", NSUUID.UUID.UUIDString]];
-        const auto bytes = bo1::tests::NativeAssetFixture();
+        const auto bytes = bo1::tests::TechsetFixture();
         NSData* fixture = [NSData dataWithBytes:bytes.data() length:bytes.size()];
         BOOL success = NO;
         if ([fixture writeToFile:path atomically:YES])
@@ -350,7 +354,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
             NSString* filename = [NSString stringWithFormat:@"bo1-native-test-%@.ff", NSUUID.UUID.UUIDString];
             NSString* path = [NSTemporaryDirectory() stringByAppendingPathComponent:filename];
             const bool passed = CheckNativeComponents(error) && CheckSyntheticFastfile(error) &&
-                bo1::tests::CheckNativeAssetFixture(path.fileSystemRepresentation, error);
+                bo1::tests::CheckNativeAssetFixture(path.fileSystemRepresentation, error) &&
+                bo1::tests::CheckTechsetFixture(path.fileSystemRepresentation, error);
             if (passed)
                 std::puts("BO1_IOS_SELF_TEST_PASS");
             else

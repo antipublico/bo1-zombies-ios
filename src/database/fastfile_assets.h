@@ -2,6 +2,7 @@
 
 #include "fastfile_inspection.h"
 #include "db_rawfile_types.h"
+#include "db_techset_types.h"
 #include <stringed/localize_entry.h>
 #include <universal/com_stringtable_types.h>
 #include <memory>
@@ -18,6 +19,7 @@ struct NativeAsset
     const RawFile* rawfile = nullptr;
     const StringTable* stringTable = nullptr;
     const LocalizeEntry* localize = nullptr;
+    const MaterialTechniqueSet* techniqueSet = nullptr;
     bool alias = false;
 };
 
@@ -45,10 +47,15 @@ private:
     friend class detail::AssetBuilder;
 };
 
-// Materialize the consecutive supported roots (RawFile, StringTable, LocalizeEntry)
+// Access the engine's variable-length trailing pass storage without indexing
+// beyond the declared passArray[1]. The technique must belong to a live prefix.
+const MaterialPass* TechniquePassAt(const MaterialTechnique& technique, size_t index);
+
+// Materialize consecutive RawFile, StringTable, LocalizeEntry and TechniqueSet roots.
 // in directory order. Stop before the first unknown body; never scan or skip it.
 // Always verify the complete compressed stream before publishing any pointers.
 // No global engine registry is modified and scripts are not executed.
+// Shader programs remain original SM3 tokens; GPU handles stay null/unloaded.
 InspectionResult LoadAssetPrefix(const char* path, AssetPrefix& output, std::string& error,
     const AssetLoadLimits& limits = {});
 }

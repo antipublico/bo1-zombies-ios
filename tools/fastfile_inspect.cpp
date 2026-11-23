@@ -3,6 +3,7 @@
 #include <inttypes.h>
 #include <cstdio>
 #include <cstring>
+#include <set>
 
 int main(int argc, char** argv)
 {
@@ -47,17 +48,42 @@ int main(int argc, char** argv)
     if (loadAssets)
     {
         size_t raw = 0, tables = 0, cells = 0, localized = 0, aliases = 0;
+        size_t techsets = 0, passes = 0, shaderWords = 0;
+        std::set<const MaterialTechnique*> techniques;
+        std::set<const MaterialVertexShader*> vertexShaders;
+        std::set<const MaterialPixelShader*> pixelShaders;
         for (const auto& asset : native.entries)
         {
             raw += asset.rawfile != nullptr;
             tables += asset.stringTable != nullptr;
             localized += asset.localize != nullptr;
             aliases += asset.alias;
+            if (asset.techniqueSet)
+            {
+                ++techsets;
+                for (const auto* technique : asset.techniqueSet->techniques)
+                {
+                    if (!technique || !techniques.insert(technique).second) continue;
+                    passes += technique->passCount;
+                    for (size_t i = 0; i < technique->passCount; ++i)
+                    {
+                        const auto* pass = TechniquePassAt(*technique, i);
+                        if (pass->vertexShader && vertexShaders.insert(pass->vertexShader).second
+                            && pass->vertexShader->prog.loadDef.program)
+                            shaderWords += pass->vertexShader->prog.loadDef.programSize;
+                        if (pass->pixelShader && pixelShaders.insert(pass->pixelShader).second
+                            && pass->pixelShader->prog.loadDef.program)
+                            shaderWords += pass->pixelShader->prog.loadDef.programSize;
+                    }
+                }
+            }
             if (asset.stringTable)
                 cells += size_t(asset.stringTable->rowCount) * size_t(asset.stringTable->columnCount);
         }
         std::printf("Native roots %zu of %zu\n", native.entries.size(), inspection.assets.size());
         std::printf("Native rawfiles %zu tables %zu cells %zu localized %zu aliases %zu\n", raw, tables, cells, localized, aliases);
+        std::printf("Native techsets %zu unique techniques %zu passes %zu vertex shaders %zu pixel shaders %zu shader words %zu\n",
+            techsets, techniques.size(), passes, vertexShaders.size(), pixelShaders.size(), shaderWords);
         std::printf("Native accounted bytes %" PRIu64 "\n", native.nativeBytes);
         std::printf("Asset body bytes %" PRIu64 "\n", native.decodedAssetBytes);
         if (native.stop == AssetStop::Complete)

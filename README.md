@@ -40,7 +40,8 @@ declared-length, script-string and asset-directory checks. Kino's zone reports
 908 assets and 789 script-string slots (788 present and one null). Its metadata
 consumes 24,399 decompressed bytes. Engine registration of reconstructed assets remains pending.
 
-`LoadAssetPrefix` now reconstructs RawFile, StringTable and LocalizeEntry objects
+`LoadAssetPrefix` now reconstructs RawFile, StringTable, LocalizeEntry and
+MaterialTechniqueSet objects
 using shared engine structure definitions for 32-bit and 64-bit ABIs. Owned
 storage keeps pointers valid across copies and moves of the result. It resolves
 prior block-4 string references, directory-root aliases and `-2` inserted alias
@@ -49,13 +50,26 @@ validates the entire compressed stream before publishing the result. Block-0
 temporary headers, block-4 alignment and sequential file offsets stay separate.
 No scripts are executed and no global engine registry is modified.
 
+Technique sets decode all 130 slots, variable-length techniques with multiple
+passes, vertex declarations, vertex/pixel SM3 programs, argument unions and
+four-float literal constants. A typed map resolves previously decoded child
+objects at their original Win32 block-4 offsets, preserving shared identities
+within and across sets. Use `TechniquePassAt` to access the trailing pass storage.
+Disk pointer tags never become native pointers directly. Serialized D3D handles
+are cleared and vertex declarations remain unloaded: loading these CPU objects
+does not translate or execute their shaders on an iOS GPU.
+
 The native loader completed all roots in 12 of the 101 local packages and loaded
-nonempty prefixes from another 27. Across those packages it reconstructed 311
-rawfiles, 10 tables with 12,522 cells, and 19,171 localized entries (counts include
-entries repeated across packages). The remaining packages stopped before an
+nonempty prefixes from another 62. Across those packages it reconstructed 311
+rawfiles, 10 tables with 12,522 cells, 19,171 localized entries, and 67 technique
+sets. Those sets contain 424 distinct techniques, 424 passes, 166 vertex shaders,
+346 pixel shaders and 304,737 shader words, deduplicated within each package
+(counts still include entries repeated across packages). The remaining packages stopped before an
 unsupported first root. All 101 complete compressed streams passed validation.
-Kino's first table has 773 rows and two columns; loading stops before root 1,
-a technique set. Native types still to implement include shaders, materials,
+Kino's first table has 773 rows and two columns; its next two technique sets
+contain no inline techniques. Loading now stops before root 3, an xmodel.
+Other local packages exercised actual shader programs and shared child objects.
+Native types still to implement include materials,
 images, models, animation, collision and sound.
 
 Configure the desktop engine with `-DBO1_WITH_STEAM=OFF` to link the static
@@ -81,11 +95,18 @@ its native component, synthetic-fastfile and native asset reconstruction checks
 in an iPhone 16e simulator running iOS 26.2. Startup and synthetic-asset result
 screenshots were inspected. The run provides six
 static libraries, an unsigned development IPA, and simulator logs/screenshots.
-The native asset suite includes 76 checks, including invalid dimensions, block
+The text asset suite includes 76 checks, including invalid dimensions, block
 bounds, pointer alias identity, lifetime after copies/moves, byte limits and a
 late stream-checksum failure. Shared runtime type layouts also compiled for
 Windows x86. Full-engine integration and execution on the physical iPhone SE
 remain pending.
+
+The added technique suite has 91 host checks and a shared iOS fixture: multiple
+passes, slot 129, typed backward aliases, inserted root aliases, shared literals,
+program tokens, cleared GPU handles, lifetime after copies/moves, exact byte
+budgets and late checksum failures. All eight host suites passed locally with
+the technique loader; it also compiled for Windows x86 and passed a warning-free
+x64 compile. The Apple SDK and simulator validation for this addition is pending.
 
 The VM and compiler now share explicit little-endian scalar operand reads and
 writes. `Scr_ReadUnsigned` consumes four bytes on both x86 and ARM64, and packed
@@ -104,8 +125,8 @@ No game data is bundled or uploaded.
 
 The workflow also builds the device app, packages `BO1Zombies-unsigned.ipa`, and
 runs `--self-test` in an iPhone simulator using synthetic metadata and native
-asset fixtures. It checks pointer ownership, alias identity and all three native
-types. It captures startup and synthetic-result screenshots and publishes
+asset fixtures. It checks pointer ownership, alias identity, text assets and the
+complete synthetic technique graph. It captures startup and synthetic-result screenshots and publishes
 simulator logs as separate artifacts. The external document picker and its
 security-scoped access still require device or UI testing. The
 IPA must be signed before device installation; simulator success does not prove

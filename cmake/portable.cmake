@@ -64,6 +64,10 @@ if (BUILD_TESTING)
     target_link_libraries(bo1_fastfile_assets_tests PRIVATE bo1_fastfile_inspection)
     add_test(NAME fastfile_assets COMMAND bo1_fastfile_assets_tests)
 
+    add_executable(bo1_techset_assets_tests tests/techset_assets_tests.cpp tests/techset_fixture.cpp)
+    target_link_libraries(bo1_techset_assets_tests PRIVATE bo1_fastfile_inspection)
+    add_test(NAME techset_assets COMMAND bo1_techset_assets_tests)
+
     if (BO1_BUILD_FASTFILE_INSPECTOR)
         find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
         add_test(NAME fastfile_inspect

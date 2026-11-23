@@ -94,10 +94,10 @@ int main()
     bo1::bytecode::Store<int16_t>(payload.data() + 195, 2);
     load(payload, InspectionResult::Ok); // Preserve disk order, as the engine loader does.
 
-    mutate(52, 7, InspectionResult::Ok);
+    mutate(52, 8, InspectionResult::Ok);
     Check(result.stop == AssetStop::UnsupportedType && result.nextAsset == 0
         && result.decodedAssetBytes == 0, "unsupported first body is never consumed");
-    mutate(60, 7, InspectionResult::Ok);
+    mutate(60, 8, InspectionResult::Ok);
     Check(result.stop == AssetStop::UnsupportedType && result.nextAsset == 1
         && result.decodedAssetBytes == 36 && result.entries[0].rawfile,
         "supported prefix survives unknown second type");
@@ -141,7 +141,7 @@ int main()
         "metadata string aliases preserve pointer identity");
 
     payload = pristine;
-    Put32(payload, 52, 7);
+    Put32(payload, 52, 8);
     payload.resize(60000, 0);
     Put32(payload, 0, payload.size() - 36);
     auto damaged = Pack(payload);

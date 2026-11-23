@@ -14,6 +14,7 @@ struct AssetNode
     RawFile raw{};
     StringTable table{};
     LocalizeEntry localize{};
+    std::unique_ptr<MaterialTechniqueSet> techniqueSet;
     std::unique_ptr<StringTableCell[]> cells;
     std::unique_ptr<int16_t[]> indices;
 };
@@ -22,6 +23,7 @@ struct AssetStorage
 {
     std::vector<std::unique_ptr<AssetNode>> nodes;
     std::vector<std::unique_ptr<char[]>> buffers;
+    std::vector<std::shared_ptr<void>> children;
 };
 
 // Disk cursors and native storage are intentionally separate. Block 0 is the
@@ -50,7 +52,7 @@ public:
             native.type = disk.type;
             if (disk.serializedTag)
             {
-                if (disk.type != 36 && disk.type != 37 && disk.type != 23)
+                if (disk.type != 36 && disk.type != 37 && disk.type != 23 && disk.type != 7)
                 {
                     output.stop = AssetStop::UnsupportedType;
                     break;
@@ -88,10 +90,15 @@ public:
                         if (!Table(*node)) return false;
                         native.stringTable = &node->table;
                     }
-                    else
+                    else if (disk.type == 23)
                     {
                         if (!Localized(*node)) return false;
                         native.localize = &node->localize;
+                    }
+                    else
+                    {
+                        if (!Techset(*node)) return false;
+                        native.techniqueSet = node->techniqueSet.get();
                     }
                     output.storage->nodes.push_back(std::move(node));
                     if (disk.serializedTag == UINT32_MAX - 1)
@@ -316,6 +323,189 @@ private:
             && String(bytecode::Load<uint32_t>(header + 4), node.localize.name);
     }
 
+    // Child tags are direct offsets, unlike indirect root aliases. Keep their
+    // Win32 locations and types separate from native addresses and sizes.
+    enum class ChildKind { Technique, Declaration, VertexShader, PixelShader, Literal };
+    struct ChildReference { uint32_t offset; ChildKind kind; void* pointer; };
+
+    bool Remember(uint32_t offset, ChildKind kind, void* pointer)
+    {
+        if (!Charge(sizeof(ChildReference))) return false;
+        children.push_back({offset, kind, pointer});
+        return true;
+    }
+
+    template<class T> bool Resolve(uint32_t tag, ChildKind kind, T*& pointer)
+    {
+        pointer = nullptr;
+        if (!tag) return true;
+        const uint32_t offset = (tag - 1) & 0x1fffffff;
+        const auto found = std::lower_bound(children.begin(), children.end(), offset,
+            [](const ChildReference& item, uint32_t key) { return item.offset < key; });
+        if (((tag - 1) >> 29) != 4 || found == children.end()
+            || found->offset != offset || found->kind != kind)
+            return reader.Fail(InspectionResult::UnsupportedReference,
+                "Technique child reference does not identify a previously decoded object of the same type.");
+        pointer = static_cast<T*>(found->pointer);
+        return true;
+    }
+
+    template<class T> bool Allocate(size_t count, T*& pointer)
+    {
+        if (count > SIZE_MAX / sizeof(T)
+            || !Charge(uint64_t(count) * sizeof(T) + sizeof(std::shared_ptr<void>))) return false;
+        std::shared_ptr<T> owner(new T[count]{}, std::default_delete<T[]>());
+        pointer = owner.get();
+        output.storage->children.push_back(std::move(owner));
+        return true;
+    }
+
+    bool Declaration(uint32_t tag, MaterialVertexDeclaration*& declaration)
+    {
+        if (tag != UINT32_MAX) return Resolve(tag, ChildKind::Declaration, declaration);
+        unsigned char disk[108];
+        if (!AdvanceBlock(sizeof(disk), 4) || !Read(disk, sizeof(disk))) return false;
+        const auto offset = static_cast<uint32_t>(block4 - sizeof(disk));
+        if (disk[0] > 16) return Fail("Vertex declaration exceeds its stream routing array.");
+        if (!Allocate(1, declaration) || !Remember(offset, ChildKind::Declaration, declaration)) return false;
+        declaration->streamCount = disk[0];
+        declaration->hasOptionalSource = disk[1] != 0;
+        // Serialized D3D pointers and the loaded flag cannot describe GPU
+        // resources in this process. Keep routing, initialize handles to null.
+        declaration->isLoaded = false;
+        for (size_t i = 0; i < 16; ++i)
+            declaration->routing.data[i] = {disk[4 + 2 * i], disk[5 + 2 * i]};
+        return true;
+    }
+
+    template<class T> bool Shader(uint32_t tag, ChildKind kind, T*& shader)
+    {
+        if (tag != UINT32_MAX) return Resolve(tag, kind, shader);
+        unsigned char disk[16];
+        if (!AdvanceBlock(sizeof(disk), 4) || !Read(disk, sizeof(disk))) return false;
+        const auto offset = static_cast<uint32_t>(block4 - sizeof(disk));
+        if (!Allocate(1, shader) || !Remember(offset, kind, shader)
+            || !String(bytecode::Load<uint32_t>(disk), shader->name)) return false;
+        auto& load = shader->prog.loadDef;
+        load.programSize = bytecode::Load<uint16_t>(disk + 12);
+        // In the original loader, any nonzero program tag is inline data.
+        if (bytecode::Load<uint32_t>(disk + 8))
+        {
+            if (!AdvanceBlock(uint64_t(load.programSize) * 4, 4)
+                || !Allocate(load.programSize, load.program)) return false;
+            for (size_t i = 0; i < load.programSize; ++i)
+            {
+                unsigned char word[4];
+                if (!Read(word, 4)) return false;
+                load.program[i] = bytecode::Load<uint32_t>(word);
+            }
+        }
+        return true;
+    }
+
+    bool Literal(uint32_t tag, const float*& target)
+    {
+        float* literal = nullptr;
+        if (tag != UINT32_MAX)
+        {
+            if (!Resolve(tag, ChildKind::Literal, literal)) return false;
+        }
+        else
+        {
+            if (!AdvanceBlock(16, 4) || !Allocate(4, literal)
+                || !Remember(static_cast<uint32_t>(block4 - 16), ChildKind::Literal, literal)) return false;
+            unsigned char disk[16];
+            if (!Read(disk, sizeof(disk))) return false;
+            for (size_t i = 0; i < 4; ++i) literal[i] = bytecode::Load<float>(disk + i * 4);
+        }
+        target = literal;
+        return true;
+    }
+
+    bool Pass(const unsigned char* disk, MaterialPass& pass)
+    {
+        pass.perPrimArgCount = disk[12];
+        pass.perObjArgCount = disk[13];
+        pass.stableArgCount = disk[14];
+        pass.customSamplerFlags = disk[15];
+        if (!Declaration(bytecode::Load<uint32_t>(disk), pass.vertexDecl)
+            || !Shader(bytecode::Load<uint32_t>(disk + 4), ChildKind::VertexShader, pass.vertexShader)
+            || !Shader(bytecode::Load<uint32_t>(disk + 8), ChildKind::PixelShader, pass.pixelShader)) return false;
+        if (bytecode::Load<uint32_t>(disk + 16))
+        {
+            const size_t count = size_t(pass.perPrimArgCount) + pass.perObjArgCount + pass.stableArgCount;
+            if (!AdvanceBlock(count * 8, 4) || !Allocate(count, pass.args)
+                || !Charge(count * sizeof(uint32_t))) return false;
+            std::vector<uint32_t> tags(count);
+            for (size_t i = 0; i < count; ++i)
+            {
+                unsigned char argument[8];
+                if (!Read(argument, 8)) return false;
+                auto& native = pass.args[i];
+                native.type = bytecode::Load<uint16_t>(argument);
+                native.dest = bytecode::Load<uint16_t>(argument + 2);
+                tags[i] = bytecode::Load<uint32_t>(argument + 4);
+                if (native.type == 3 || native.type == 5)
+                    native.u.codeConst = {bytecode::Load<uint16_t>(argument + 4), argument[6], argument[7]};
+                else if (native.type == 4)
+                    native.u.codeSampler = tags[i];
+                else if (native.type != 1 && native.type != 7)
+                    native.u.nameHash = tags[i];
+            }
+            for (size_t i = 0; i < count; ++i)
+                if ((pass.args[i].type == 1 || pass.args[i].type == 7)
+                    && !Literal(tags[i], pass.args[i].u.literalConst)) return false;
+        }
+        return true;
+    }
+
+    bool Technique(uint32_t tag, MaterialTechnique*& technique)
+    {
+        if (tag != UINT32_MAX) return Resolve(tag, ChildKind::Technique, technique);
+        unsigned char disk[8];
+        if (!AdvanceBlock(sizeof(disk), 4) || !Read(disk, sizeof(disk))) return false;
+        const auto offset = static_cast<uint32_t>(block4 - sizeof(disk));
+        const auto count = bytecode::Load<uint16_t>(disk + 6);
+        const size_t nativeSize = sizeof(MaterialTechnique)
+            + (count ? size_t(count - 1) * sizeof(MaterialPass) : 0);
+        if (!AdvanceBlock(uint64_t(count) * 20) || !Charge(nativeSize
+            + sizeof(std::shared_ptr<void>) + size_t(count) * 20)) return false;
+        // Construct the header (including its first pass) and each additional
+        // trailing pass explicitly. All these engine types are trivial.
+        std::shared_ptr<void> owner(::operator new(nativeSize), [](void* p) { ::operator delete(p); });
+        technique = new (owner.get()) MaterialTechnique{};
+        technique->flags = bytecode::Load<uint16_t>(disk + 4);
+        technique->passCount = count;
+        for (size_t i = 1; i < count; ++i)
+            new (static_cast<unsigned char*>(owner.get()) + offsetof(MaterialTechnique, passArray)
+                + i * sizeof(MaterialPass)) MaterialPass{};
+        output.storage->children.push_back(std::move(owner));
+        if (!Remember(offset, ChildKind::Technique, technique)) return false;
+        std::vector<unsigned char> passes(size_t(count) * 20);
+        if (!Read(passes.data(), passes.size())) return false;
+        for (size_t i = 0; i < count; ++i)
+        {
+            auto* pass = const_cast<MaterialPass*>(TechniquePassAt(*technique, i));
+            if (!Pass(passes.data() + i * 20, *pass)) return false;
+        }
+        return String(bytecode::Load<uint32_t>(disk), technique->name);
+    }
+
+    bool Techset(AssetNode& node)
+    {
+        unsigned char disk[528];
+        if (!Header(disk, sizeof(disk)) || !Charge(sizeof(MaterialTechniqueSet))) return false;
+        node.techniqueSet = std::make_unique<MaterialTechniqueSet>();
+        auto& set = *node.techniqueSet;
+        set.worldVertFormat = disk[4];
+        set.unused[0] = disk[5];
+        set.techsetFlags = bytecode::Load<uint16_t>(disk + 6);
+        if (!String(bytecode::Load<uint32_t>(disk), set.name)) return false;
+        for (size_t i = 0; i < 130; ++i)
+            if (!Technique(bytecode::Load<uint32_t>(disk + 8 + i * 4), set.techniques[i])) return false;
+        return true;
+    }
+
     using ResolvedString = std::pair<uint32_t, const char*>;
     using InsertedAlias = std::pair<uint32_t, size_t>;
     Reader& reader;
@@ -329,11 +519,20 @@ private:
     std::vector<ResolvedString> strings;
     std::vector<InsertedAlias> insertedAliases;
     std::vector<const char*> scriptCopies;
+    std::vector<ChildReference> children;
 };
 }
 
 namespace bo1::fastfile
 {
+const MaterialPass* TechniquePassAt(const MaterialTechnique& technique, size_t index)
+{
+    if (index >= technique.passCount) return nullptr;
+    return std::launder(reinterpret_cast<const MaterialPass*>(
+        reinterpret_cast<const unsigned char*>(&technique) + offsetof(MaterialTechnique, passArray)
+        + index * sizeof(MaterialPass)));
+}
+
 InspectionResult LoadAssetPrefix(const char* path, AssetPrefix& output, std::string& error,
     const AssetLoadLimits& limits)
 {
