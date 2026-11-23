@@ -85,3 +85,21 @@ jobs:
           name: bo1-ios-simulator-results
           path: build/simulator-results/
           if-no-files-found: warn
+
+  windows-inspector:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure portable Windows tools
+        run: cmake -S . -B build/windows -DBO1_PORTABLE_TOOLS=ON -DBUILD_TESTING=ON
+      - name: Build portable Windows inspector and tests
+        run: cmake --build build/windows --config Release --parallel 4
+      - name: Run Windows unit and integration tests
+        run: ctest --test-dir build/windows -C Release --output-on-failure
+      - name: Upload Windows inspector executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: bo1-fastfile-inspector-windows-x64
+          path: build/windows/Release/bo1_fastfile_inspect.exe
+          if-no-files-found: error

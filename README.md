@@ -23,6 +23,16 @@ ctest --test-dir build/portable -C Release --output-on-failure
 ```
 
 Run `bo1_fastfile_inspect <path-to-zone.ff>` from the build output directory.
+GitHub Actions also builds a Windows x64 inspector artifact
+(`bo1-fastfile-inspector-windows-x64`) without bundling copyrighted game data.
+Extract the downloaded artifact ZIP, then on Windows, from PowerShell run:
+
+```powershell
+.\bo1_fastfile_inspect.exe --load-assets "C:\path\to\your\zone.ff" *> bo1-report.txt
+```
+
+Share the small `bo1-report.txt` for diagnosis instead of uploading game archives.
+The tool reads the selected file and does not modify or upload it.
 It reads the package header and checks the complete compressed stream using the
 engine's bundled zlib. Authenticated packages follow the existing loader's
 unsupported path. The output reports declared sizes and actual decompressed

@@ -91,7 +91,38 @@ int main(int argc, char** argv)
         else
             std::printf("Native prefix stopped at index %zu type %" PRIu32 " (%s), reason %s.\n", native.nextAsset,
                 inspection.assets[native.nextAsset].type, AssetTypeName(inspection.assets[native.nextAsset].type),
-                native.stop == AssetStop::UnsupportedType ? "unsupported type" : "unsupported root reference");
+                native.stop == AssetStop::UnsupportedType ? "unsupported type" :
+                native.stop == AssetStop::UnsupportedModelBody ? "XModel child resources not registered" :
+                "unsupported root reference");
+        if (native.pendingXModel)
+        {
+            const auto& m = *native.pendingXModel;
+            std::printf("XModel header bones %u rootBones %u surfaces %u LODs %d collisionSurfaces %d\n",
+                unsigned(m.numBones), unsigned(m.numRootBones), unsigned(m.numSurfaces),
+                int(m.numLods), int(m.numCollisionSurfaces));
+            if (native.pendingXModelSkeleton)
+            {
+                const auto& skel = *native.pendingXModelSkeleton;
+                std::printf("XModel name %s\n", skel.name.empty() ? "(not resolved)" : skel.name.c_str());
+                std::printf("XModel retained skeleton bytes %" PRIu64 " unresolved child bits 0x%08" PRIx32 "\n",
+                    skel.inlineArrayBytes, skel.unresolvedFields);
+                std::printf("XModel XSurface headers %zu declared vertices %" PRIu64
+                    " declared triangles %" PRIu64 " retained geometry bytes %" PRIu64 "\n",
+                    skel.surfaceHeaders.size(), skel.declaredVertices, skel.declaredTriangles,
+                    skel.decodedGeometryBytes);
+                size_t missing = 0;
+                for (const auto& surf : skel.surfaceBodies)
+                    missing += surf.unresolvedFields != 0;
+                std::printf("XModel surfaces with unresolved shared child references %zu\n", missing);
+                for (size_t i = 0; i < skel.surfaceHeaders.size() && i < 12; ++i)
+                {
+                    const auto& s = skel.surfaceHeaders[i];
+                    std::printf("XSurface %zu vertices %u triangles %u flags 0x%04x\n",
+                        i, unsigned(s.vertCount), unsigned(s.triCount), unsigned(s.flags));
+                }
+            }
+            std::printf("XModel is a CPU-only preview; native rendering and gameplay are not enabled.\n");
+        }
     }
     std::printf("Envelope, compressed stream and metadata verified.\n");
     return 0;

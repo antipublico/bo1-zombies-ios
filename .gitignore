@@ -17,6 +17,11 @@
 # Mono auto generated files
 mono_crash.*
 
+# Licensed game content is never committed to the source tree.
+*.ff
+*.iwd
+*.ipa
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
