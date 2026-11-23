@@ -44,8 +44,8 @@ if (WIN32 AND BO1_BUILD_FASTFILE_INSPECTOR)
     add_executable(bo1_scene_packer_win WIN32 tools/bo1_scene_packer_win.cpp)
     target_include_directories(bo1_scene_packer_win PRIVATE "${PROJECT_SOURCE_DIR}/src")
     target_compile_features(bo1_scene_packer_win PRIVATE cxx_std_17)
-    target_link_libraries(bo1_scene_packer_win PRIVATE bo1_fastfile_inspection
-        comdlg32 user32)
+    target_link_libraries(bo1_scene_packer_win PRIVATE bo1_fastfile_inspection bo1_inspect_zlib
+        comdlg32 user32 shell32 ole32)
 endif()
 
 include(CTest)
