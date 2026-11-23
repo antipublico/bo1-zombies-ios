@@ -108,6 +108,12 @@ jobs:
         run: cmake --build build/windows --config Release --parallel 4
       - name: Run Windows unit and integration tests
         run: ctest --test-dir build/windows -C Release --output-on-failure
+      - name: Upload native Windows scene packer
+        uses: actions/upload-artifact@v4
+        with:
+          name: bo1-scene-packer-windows-x64
+          path: build/windows/Release/bo1_scene_packer_win.exe
+          if-no-files-found: error
       - name: Upload Windows inspector executable
         uses: actions/upload-artifact@v4
         with:
