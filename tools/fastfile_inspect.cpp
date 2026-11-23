@@ -19,6 +19,7 @@ int main(int argc, char** argv)
     std::string error;
     AssetLoadLimits loadLimits;
     loadLimits.previewFirstMaterialHeader = true; // Local diagnostic only.
+    loadLimits.previewFirstImageHeader = true;
     const auto result = loadAssets ? LoadAssetPrefix(argv[2], native, error, loadLimits)
                                    : InspectFile(argv[1], inspection, error);
     if (result != InspectionResult::Ok)
@@ -149,7 +150,27 @@ int main(int argc, char** argv)
                             i, texture.nameHash, unsigned(texture.semantic),
                             unsigned(texture.samplerState), texture.imageOrWaterTag);
                     }
-                    std::printf("First inline Material is a CPU-only diagnostic; image and shader resources remain unresolved.\n");
+                    if (material.firstInlineImage)
+                    {
+                        const auto& image = *material.firstInlineImage;
+                        std::printf("First inline GfxImage texture slot %zu name %s\n",
+                            image.textureSlot,
+                            image.name.empty() ? "(not resolved)" : image.name.c_str());
+                        std::printf("First inline GfxImage dimensions %ux%ux%u levels %u mapType %u semantic %u category %u streaming %u\n",
+                            unsigned(image.width), unsigned(image.height),
+                            unsigned(image.depth), unsigned(image.levelCount),
+                            unsigned(image.mapType), unsigned(image.semantic),
+                            unsigned(image.category), unsigned(image.streaming));
+                        std::printf("First inline GfxImage sizes base %" PRIu32 " loaded %" PRIu32
+                            " hash 0x%08" PRIx32 "\n",
+                            image.baseSize, image.loadedSize, image.hash);
+                        std::printf("First inline GfxImage tags texture 0x%08" PRIx32
+                            " pixels 0x%08" PRIx32 " name 0x%08" PRIx32 "\n",
+                            image.textureTag, image.pixelsTag, image.nameTag);
+                    }
+                    if (material.inlineWaterBeforeImage)
+                        std::printf("First inline GfxImage skipped: inline water_t precedes the image.\n");
+                    std::printf("First inline Material is a CPU-only diagnostic; pixel bytes and shaders remain unresolved.\n");
                 }
                 for (size_t i = 0; i < skel.surfaceHeaders.size() && i < 12; ++i)
                 {

@@ -420,6 +420,77 @@ int main()
         && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName),
         "inline TechniqueSet blocks reading subsequent Material texture headers");
 
+    // The first texture points at an embedded GfxImage. A 52-byte header is
+    // serialized in TEMP; the image name is an XString in persistent block 4.
+    auto withImage = materialWithHeader;
+    const size_t imageOffset = withImage.size();
+    withImage.insert(withImage.end(), 52, 0);
+    Put32(withImage, imageOffset, UINT32_MAX); // Texture load-def, still unread.
+    withImage[imageOffset + 4] = 2; // mapType
+    withImage[imageOffset + 5] = 2; // semantic
+    withImage[imageOffset + 6] = 1; // category
+    bo1::bytecode::Store<uint16_t>(withImage.data() + imageOffset + 20, 256);
+    bo1::bytecode::Store<uint16_t>(withImage.data() + imageOffset + 22, 128);
+    bo1::bytecode::Store<uint16_t>(withImage.data() + imageOffset + 24, 1);
+    withImage[imageOffset + 26] = 5;
+    withImage[imageOffset + 27] = 1;
+    Put32(withImage, imageOffset + 28, 8192);
+    Put32(withImage, imageOffset + 32, UINT32_MAX);
+    Put32(withImage, imageOffset + 36, 4096);
+    Put32(withImage, imageOffset + 44, UINT32_MAX);
+    Put32(withImage, imageOffset + 48, 0xCAFE1234u);
+    const char imageName[] = "foliage_diffuse";
+    withImage.insert(withImage.end(), imageName, imageName + sizeof(imageName));
+    Put32(withImage, 8, 252 + 192 + 52);
+    Put32(withImage, 0, static_cast<uint32_t>(withImage.size() - 36));
+    AssetLoadLimits imageLimits = deep;
+    imageLimits.previewFirstImageHeader = true;
+    load(withImage, InspectionResult::Ok, imageLimits);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->name == imageName
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->textureSlot == 0
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->width == 256
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->height == 128
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->depth == 1
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->levelCount == 5
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->textureTag == UINT32_MAX
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->pixelsTag == UINT32_MAX
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->baseSize == 8192
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadedSize == 4096
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->hash == 0xCAFE1234u
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32
+            + 52 + sizeof(imageName),
+        "opt-in 52-byte image header and XString preserve original pixel tags");
+    auto imageTruncated = withImage;
+    imageTruncated.resize(imageOffset + 51);
+    Put32(imageTruncated, 0, static_cast<uint32_t>(imageTruncated.size() - 36));
+    load(imageTruncated, InspectionResult::InvalidFormat, imageLimits);
+    Check(!result.pendingXModelSkeleton,
+        "truncated nested GfxImage header publishes no partial model");
+    auto imageNoName = withImage;
+    Put32(imageNoName, imageOffset + 44, 0);
+    imageNoName.resize(imageOffset + 52);
+    Put32(imageNoName, 0, static_cast<uint32_t>(imageNoName.size() - 36));
+    load(imageNoName, InspectionResult::Ok, imageLimits);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->name.empty()
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32 + 52,
+        "inline GfxImage with null name does not require a string payload");
+    auto waterFirst = withImage;
+    waterFirst[textureOffset + 7] = 11;
+    Put32(waterFirst, 0, static_cast<uint32_t>(waterFirst.size() - 36));
+    load(waterFirst, InspectionResult::Ok, imageLimits);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && !result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
+        && result.pendingXModelSkeleton->firstInlineMaterial->inlineWaterBeforeImage
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32,
+        "inline water before image prevents unsafe image header inspection");
+
     auto truncatedHandles = modelPayload;
     truncatedHandles.pop_back();
     Put32(truncatedHandles, 0, static_cast<uint32_t>(truncatedHandles.size() - 36));

@@ -543,6 +543,67 @@ private:
             material.textureHeaders.push_back(texture);
         }
         material.textureHeaderBytes = bytes;
+        // Load_MaterialTextureDefArray processes all nested image/water
+        // children after the header table. The first -1/-2 child is safe to
+        // probe if it is an image. A preceding inline water_t would occupy
+        // FILE/TEMP bytes; stop instead of guessing its size or placement.
+        if (limits.previewFirstImageHeader)
+        {
+            for (size_t i = 0; i < material.textureHeaders.size(); ++i)
+            {
+                const auto& texture = material.textureHeaders[i];
+                const uint32_t tag = texture.imageOrWaterTag;
+                if (tag != UINT32_MAX && tag != UINT32_MAX - 1)
+                    continue;
+                if (texture.semantic == 11)
+                {
+                    material.inlineWaterBeforeImage = true;
+                    return true;
+                }
+                return FirstInlineImage(i, tag, material);
+            }
+        }
+        return true;
+    }
+
+    bool FirstInlineImage(size_t index, uint32_t ptrTag,
+        XMaterialHeaderPreview& material)
+    {
+        // GfxImagePtr enters TEMP and invokes Load_GfxImage(1): a 52-byte
+        // Win32 header followed by an XString in persistent block 4.
+        // -2 reserves an inserted alias slot in block 4 before that name.
+        if (ptrTag == UINT32_MAX - 1 && !AdvanceBlock(4, 4))
+            return false;
+        unsigned char disk[52]{};
+        if (!temp.Advance(sizeof(disk), 4))
+            return Fail("First inline GfxImage exceeds temporary block 0.");
+        if (!Read(disk, sizeof(disk))) return false;
+        XImageHeaderPreview image{};
+        image.textureSlot = index;
+        image.textureTag = bytecode::Load<uint32_t>(disk);
+        image.mapType = disk[4];
+        image.semantic = disk[5];
+        image.category = disk[6];
+        image.delayLoadPixels = disk[7] != 0;
+        image.width = bytecode::Load<uint16_t>(disk + 20);
+        image.height = bytecode::Load<uint16_t>(disk + 22);
+        image.depth = bytecode::Load<uint16_t>(disk + 24);
+        image.levelCount = disk[26];
+        image.streaming = disk[27];
+        image.baseSize = bytecode::Load<uint32_t>(disk + 28);
+        image.pixelsTag = bytecode::Load<uint32_t>(disk + 32);
+        image.loadedSize = bytecode::Load<uint32_t>(disk + 36);
+        image.nameTag = bytecode::Load<uint32_t>(disk + 44);
+        image.hash = bytecode::Load<uint32_t>(disk + 48);
+        const char* name = nullptr;
+        if (!String(image.nameTag, name)) return false;
+        if (name)
+        {
+            if (!Charge(std::strlen(name) + 1)) return false;
+            image.name.assign(name);
+        }
+        if (!Charge(sizeof(XImageHeaderPreview))) return false;
+        material.firstInlineImage = std::move(image);
         return true;
     }
 

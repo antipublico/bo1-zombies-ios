@@ -51,6 +51,30 @@ struct XMaterialTexturePreview
     uint8_t mature = 0;
 };
 
+// Packed, 52-byte Win32 GfxImage header. A preview only: it is not a decoded
+// texture, and no GfxImageLoadDef pixel bytes are read or uploaded to a GPU.
+struct XImageHeaderPreview
+{
+    size_t textureSlot = 0;
+    std::string name;
+    uint32_t textureTag = 0;
+    uint32_t nameTag = 0;
+    uint32_t baseSize = 0;
+    uint32_t loadedSize = 0;
+    uint32_t pixelsTag = 0;
+    uint32_t hash = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    uint16_t depth = 0;
+    uint8_t mapType = 0;
+    uint8_t semantic = 0;
+    uint8_t category = 0;
+    uint8_t levelCount = 0;
+    uint8_t streaming = 0;
+    bool delayLoadPixels = false;
+    bool skippedBecauseWater = false;
+};
+
 struct XMaterialHeaderPreview
 {
     size_t slot = 0;
@@ -77,6 +101,9 @@ struct XMaterialHeaderPreview
     bool nestedTechniqueSetPending = false;
     bool textureChildrenPending = false;
     bool textureTableReferenced = false;
+    // First nested image (if it comes before water or other recursive data).
+    std::optional<XImageHeaderPreview> firstInlineImage;
+    bool inlineWaterBeforeImage = false;
 };
 
 struct XModelSkeletonPreview
@@ -132,6 +159,9 @@ struct AssetLoadLimits
     // header and name after its parent XModel's material pointer table.
     // Leave false for strict header-only callers and existing fixtures.
     bool previewFirstMaterialHeader = false;
+    // Enables the first 52-byte GfxImage header and its XString name.
+    // Requires previewFirstMaterialHeader; no GfxImageLoadDef/pixels are read.
+    bool previewFirstImageHeader = false;
 };
 
 struct AssetPrefix
