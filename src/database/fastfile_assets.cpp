@@ -1,5 +1,6 @@
 #include "fastfile_assets.h"
 #include "fastfile_reader.h"
+#include "db_temp_stream_cursor.h"
 #include <platform/bo1_bytecode_io.h>
 #include <algorithm>
 #include <climits>
@@ -36,7 +37,8 @@ public:
     AssetBuilder(Reader& reader, Inspection& inspection, const MetadataState& metadata,
         AssetPrefix& output, const AssetLoadLimits& limits)
         : reader(reader), inspection(inspection), metadata(metadata), output(output), limits(limits),
-          block4(metadata.block4Cursor), declared(XFileHeaderSize + uint64_t(inspection.file.size))
+          block4(metadata.block4Cursor), temp(inspection.file.blockSize[0]),
+          declared(XFileHeaderSize + uint64_t(inspection.file.size))
     {
         output.storage = std::make_shared<AssetStorage>();
     }
@@ -47,6 +49,8 @@ public:
             return false;
         for (size_t index = 0; index < inspection.assets.size(); ++index)
         {
+            if (!temp.ResetRoot())
+                return Fail("Unbalanced temporary stream stack at asset boundary.");
             const AssetEntry& disk = inspection.assets[index];
             NativeAsset native{};
             native.type = disk.type;
@@ -151,8 +155,9 @@ private:
 
     bool Header(unsigned char* bytes, size_t size)
     {
-        // PopStreamPos restores block 0 to the position preceding this root.
-        if (size > inspection.file.blockSize[0])
+        // TEMP positions are restored after nested headers and reset between
+        // roots. Nested model/material loaders will use Push/Pop for children.
+        if (!temp.Advance(size))
             return Fail("Asset header exceeds temporary stream block 0.");
         return Read(bytes, size);
     }
@@ -514,6 +519,7 @@ private:
     AssetPrefix& output;
     const AssetLoadLimits& limits;
     uint64_t block4;
+    TempStreamCursor temp;
     uint64_t declared;
     uint64_t allocated = 0;
     std::vector<ResolvedString> strings;
