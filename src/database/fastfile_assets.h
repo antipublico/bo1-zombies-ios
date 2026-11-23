@@ -3,15 +3,17 @@
 #include "fastfile_inspection.h"
 #include "db_rawfile_types.h"
 #include "db_techset_types.h"
+#include "db_xmodel_header.h"
 #include <stringed/localize_entry.h>
 #include <universal/com_stringtable_types.h>
 #include <memory>
+#include <optional>
 
 namespace bo1::fastfile
 {
 namespace detail { struct AssetStorage; class AssetBuilder; }
 
-enum class AssetStop { Complete, UnsupportedType, UnsupportedRootReference };
+enum class AssetStop { Complete, UnsupportedType, UnsupportedRootReference, UnsupportedModelBody };
 
 struct NativeAsset
 {
@@ -37,6 +39,9 @@ struct AssetPrefix
     std::vector<NativeAsset> entries;
     AssetStop stop = AssetStop::Complete;
     size_t nextAsset = 0;
+    // Preview of the first XModel whose nested geometry has not been loaded.
+    // This is NOT a reconstructed or registered native model.
+    std::optional<XModelHeader> pendingXModel;
     uint64_t decodedAssetBytes = 0;
     // Budget accounting (including temporary data), not process RSS.
     uint64_t nativeBytes = 0;
