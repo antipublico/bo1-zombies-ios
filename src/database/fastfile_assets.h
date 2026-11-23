@@ -18,6 +18,26 @@ enum class AssetStop { Complete, UnsupportedType, UnsupportedRootReference, Unsu
 
 // Read-only CPU preview. Bone IDs are still serialized script-string indices,
 // not resolved engine strings. Arrays remain separate from any native XModel.
+struct XSurfaceCollisionPreview
+{
+    uint32_t nodeCount = 0;
+    uint32_t leafCount = 0;
+    std::vector<uint8_t> nodes;
+    std::vector<uint8_t> leaves;
+};
+
+struct XSurfaceBodyPreview
+{
+    std::vector<uint8_t> blendIndices;
+    std::vector<uint8_t> tensionData;
+    std::vector<uint8_t> packedVertices;
+    std::vector<uint8_t> rigidLists;
+    std::vector<uint8_t> triangleIndices;
+    std::vector<XSurfaceCollisionPreview> inlineCollisionTrees;
+    uint32_t unresolvedFields = 0;
+    uint64_t inlineBodyBytes = 0;
+};
+
 struct XModelSkeletonPreview
 {
     std::string name;
@@ -33,7 +53,10 @@ struct XModelSkeletonPreview
     // Complete XSurface headers are read as a contiguous array in block 4.
     // Their nested vertex/collision/material resources are not materialized.
     std::vector<XSurfaceHeader> surfaceHeaders;
+    // CPU-owned data only, never raw Direct3D GPU handles.
+    std::vector<XSurfaceBodyPreview> surfaceBodies;
     uint64_t surfaceHeaderBytes = 0;
+    uint64_t decodedGeometryBytes = 0;
     uint64_t declaredVertices = 0;
     uint64_t declaredTriangles = 0;
 };

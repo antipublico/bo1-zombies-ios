@@ -282,6 +282,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
                 skel.surfaceHeaders.size(),
                 static_cast<unsigned long long>(skel.declaredVertices),
                 static_cast<unsigned long long>(skel.declaredTriangles)];
+            [text appendFormat:@"Bytes de geometría reconstruidos en CPU: %llu\n",
+                static_cast<unsigned long long>(skel.decodedGeometryBytes)];
         }
     }
     [text appendString:@"\nLos shaders aún no se ejecutan en la GPU. El contenido todavía no está integrado en una partida."];

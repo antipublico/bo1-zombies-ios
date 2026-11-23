@@ -247,6 +247,60 @@ int main()
         && result.pendingXModelSkeleton->declaredVertices == 123
         && result.pendingXModelSkeleton->declaredTriangles == 45,
         "XModel geometry preview decodes a serialized XSurface array");
+    // Contiguous XSurface headers are followed by per-surface child arrays.
+    // Preserve the original FILE ordering while applying 16-byte stream-block
+    // alignment to packed vertices and triangle indices.
+    auto withInlineGeometry = modelPayload;
+    bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + surfStart + 4, 3);
+    bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + surfStart + 6, 1);
+    Put32(withInlineGeometry, surfStart + 32, UINT32_MAX);
+    Put32(withInlineGeometry, surfStart + 12, UINT32_MAX);
+    const size_t firstVertex = withInlineGeometry.size();
+    withInlineGeometry.insert(withInlineGeometry.end(), 3 * 32 + 3 * 2, 0);
+    bo1::bytecode::Store<float>(withInlineGeometry.data() + firstVertex, 1.5f);
+    bo1::bytecode::Store<float>(withInlineGeometry.data() + firstVertex + 4, -2.25f);
+    bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + firstVertex + 96, 0);
+    bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + firstVertex + 98, 1);
+    bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + firstVertex + 100, 2);
+    Put32(withInlineGeometry, 0, static_cast<uint32_t>(withInlineGeometry.size() - 36));
+    load(withInlineGeometry, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->surfaceBodies.size() == 12
+        && result.pendingXModelSkeleton->surfaceBodies[0].packedVertices.size() == 96
+        && result.pendingXModelSkeleton->surfaceBodies[0].triangleIndices.size() == 6
+        && result.pendingXModelSkeleton->surfaceBodies[0].inlineBodyBytes == 102
+        && result.pendingXModelSkeleton->decodedGeometryBytes == 102
+        && bo1::bytecode::Load<float>(result.pendingXModelSkeleton->surfaceBodies[0].packedVertices.data()) == 1.5f
+        && bo1::bytecode::Load<uint16_t>(
+            result.pendingXModelSkeleton->surfaceBodies[0].triangleIndices.data() + 4) == 2
+        && result.decodedAssetBytes == 252 + 816 + 102,
+        "XSurface inline vertices and triangle indices survive portable CPU reconstruction");
+    auto truncatedGeometry = withInlineGeometry;
+    truncatedGeometry.pop_back();
+    Put32(truncatedGeometry, 0, static_cast<uint32_t>(truncatedGeometry.size() - 36));
+    load(truncatedGeometry, InspectionResult::InvalidFormat);
+    Check(!result.pendingXModelSkeleton, "truncated XSurface geometry publishes no buffers");
+
+    auto withCollisionTree = modelPayload;
+    withCollisionTree[surfStart + 1] = 1; // one XRigidVertList
+    Put32(withCollisionTree, surfStart + 40, UINT32_MAX);
+    const size_t rigidBegin = withCollisionTree.size();
+    withCollisionTree.insert(withCollisionTree.end(), 12 + 40 + 16 + 2, 0);
+    Put32(withCollisionTree, rigidBegin + 8, UINT32_MAX);
+    Put32(withCollisionTree, rigidBegin + 12 + 24, 1); // nodeCount
+    Put32(withCollisionTree, rigidBegin + 12 + 28, 1); // node presence
+    Put32(withCollisionTree, rigidBegin + 12 + 32, 1); // leafCount
+    Put32(withCollisionTree, rigidBegin + 12 + 36, 1); // leaf presence
+    Put32(withCollisionTree, 0, static_cast<uint32_t>(withCollisionTree.size() - 36));
+    load(withCollisionTree, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->surfaceBodies[0].rigidLists.size() == 12
+        && result.pendingXModelSkeleton->surfaceBodies[0].inlineCollisionTrees.size() == 1
+        && result.pendingXModelSkeleton->surfaceBodies[0].inlineCollisionTrees[0].nodeCount == 1
+        && result.pendingXModelSkeleton->surfaceBodies[0].inlineCollisionTrees[0].nodes.size() == 16
+        && result.pendingXModelSkeleton->surfaceBodies[0].inlineCollisionTrees[0].leaves.size() == 2
+        && result.pendingXModelSkeleton->decodedGeometryBytes == 12 + 40 + 16 + 2,
+        "XSurface rigid list and inline collision tree with nodes and leaves");
+
     auto malformedSurface = modelPayload;
     bo1::bytecode::Store<int16_t>(malformedSurface.data() + surfStart + 16, -1);
     load(malformedSurface, InspectionResult::InvalidFormat);

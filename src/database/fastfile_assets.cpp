@@ -330,7 +330,92 @@ private:
             preview.surfaceHeaders.push_back(header);
         }
         preview.surfaceHeaderBytes = bytes;
+        if (!Charge(size_t(model.numSurfaces) * sizeof(XSurfaceBodyPreview)))
+            return false;
+        preview.surfaceBodies.reserve(model.numSurfaces);
+        for (const auto& surface : preview.surfaceHeaders)
+        {
+            XSurfaceBodyPreview body;
+            if (!SurfaceBody(surface, body)) return false;
+            preview.decodedGeometryBytes += body.inlineBodyBytes;
+            preview.surfaceBodies.push_back(std::move(body));
+        }
         return true;
+    }
+
+    // Every XSurface's children follow its header-array block in the exact
+    // Load_XSurface order. Referenced/shared tags are left unresolved; they
+    // consume no FILE bytes. Only serial -1 means an inline geometry array.
+    bool SurfaceArray(uint32_t tag, size_t bytes, uint64_t alignment,
+        std::vector<uint8_t>& outputBytes, XSurfaceBodyPreview& preview,
+        uint32_t unresolvedFlag)
+    {
+        if (tag != UINT32_MAX)
+        {
+            if (tag) preview.unresolvedFields |= unresolvedFlag;
+            return true;
+        }
+        if (!AdvanceBlock(bytes, alignment) || !Charge(bytes)) return false;
+        outputBytes.resize(bytes);
+        if (bytes && !Read(outputBytes.data(), bytes)) return false;
+        preview.inlineBodyBytes += bytes;
+        return true;
+    }
+
+    bool InlineCollisionTree(XSurfaceBodyPreview& preview)
+    {
+        unsigned char disk[40];
+        if (!AdvanceBlock(sizeof(disk), 4) || !Charge(sizeof(disk)
+            + sizeof(XSurfaceCollisionPreview)) || !Read(disk, sizeof(disk)))
+            return false;
+        preview.inlineBodyBytes += sizeof(disk);
+        XSurfaceCollisionPreview tree{};
+        tree.nodeCount = bytecode::Load<uint32_t>(disk + 24);
+        const uint32_t nodeTag = bytecode::Load<uint32_t>(disk + 28);
+        tree.leafCount = bytecode::Load<uint32_t>(disk + 32);
+        const uint32_t leafTag = bytecode::Load<uint32_t>(disk + 36);
+        // Load_XSurfaceCollisionTree treats any nonzero tag as inline,
+        // unlike the sentinel-specific XSurface array children.
+        const auto max = uint64_t(limits.maxNativeBytes);
+        if ((nodeTag && uint64_t(tree.nodeCount) * 16 > max)
+            || (leafTag && uint64_t(tree.leafCount) * 2 > max))
+            return reader.Fail(InspectionResult::LimitExceeded,
+                "XSurface collision tree exceeds geometry memory limit.");
+        if (!SurfaceArray(nodeTag ? UINT32_MAX : 0, size_t(tree.nodeCount) * 16,
+                16, tree.nodes, preview, 0)
+            || !SurfaceArray(leafTag ? UINT32_MAX : 0, size_t(tree.leafCount) * 2,
+                2, tree.leaves, preview, 0))
+            return false;
+        preview.inlineCollisionTrees.push_back(std::move(tree));
+        return true;
+    }
+
+    bool SurfaceBody(const XSurfaceHeader& surface, XSurfaceBodyPreview& preview)
+    {
+        const auto sizes = CalculateXSurfaceInlineBytes(surface);
+        if (!SurfaceArray(surface.vertsBlendTag, size_t(sizes.blendIndices), 2,
+                preview.blendIndices, preview, 1)
+            || !SurfaceArray(surface.tensionDataTag, size_t(sizes.tensionData), 4,
+                preview.tensionData, preview, 2)
+            || !SurfaceArray(surface.packedVerticesTag, size_t(sizes.packedVertices), 16,
+                preview.packedVertices, preview, 4)
+            || !SurfaceArray(surface.rigidVertListTag, size_t(sizes.rigidLists), 4,
+                preview.rigidLists, preview, 8))
+            return false;
+        // XRigidVertListArray reads all 12-byte list records first and
+        // subsequently loads each referenced collision-tree body.
+        for (size_t i = 0; i + 12 <= preview.rigidLists.size(); i += 12)
+        {
+            const uint32_t tag = bytecode::Load<uint32_t>(preview.rigidLists.data() + i + 8);
+            if (tag == UINT32_MAX)
+            {
+                if (!InlineCollisionTree(preview)) return false;
+            }
+            else if (tag)
+                preview.unresolvedFields |= 32;
+        }
+        return SurfaceArray(surface.triIndicesTag, size_t(sizes.triangleIndices),
+            16, preview.triangleIndices, preview, 16);
     }
 
     bool Raw(AssetNode& node)
