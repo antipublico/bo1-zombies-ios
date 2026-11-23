@@ -15,14 +15,104 @@
 #include "../tests/native_asset_fixture.h"
 #include "../tests/techset_fixture.h"
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <string>
+#include <vector>
 
 static bool runSelfTest = false;
 static bool showFixturePreview = false;
+
+// Read only the 48-byte IWI metadata and its largest BC2 mip from the
+// security-scoped file. UIKit receives a fully owned, premultiplied RGBA8
+// CGImage; no compressed game content is bundled or uploaded.
+static UIImage* IwiPreviewForPath(const char* path, NSString** details)
+{
+    auto fail = [&](NSString* reason) -> UIImage*
+    {
+        if (details) *details = reason;
+        return nil;
+    };
+    std::ifstream stream(path, std::ios::binary | std::ios::ate);
+    if (!stream)
+        return fail(@"No se pudo abrir el archivo .iwi.");
+    const auto end = stream.tellg();
+    if (end < std::streampos(bo1::texture::IwiHeaderBytes))
+        return fail(@"El archivo .iwi no contiene una cabecera de 48 bytes.");
+    const auto total = static_cast<std::uint64_t>(end);
+    stream.seekg(0, std::ios::beg);
+    std::array<unsigned char, bo1::texture::IwiHeaderBytes> disk{};
+    stream.read(reinterpret_cast<char*>(disk.data()),
+        static_cast<std::streamsize>(disk.size()));
+    if (!stream)
+        return fail(@"No se pudo leer la cabecera .iwi.");
+
+    bo1::texture::IwiHeader header{};
+    if (bo1::texture::ParseIwiHeader(disk.data(), disk.size(), total, header)
+            != bo1::texture::IwiParseResult::Ok)
+        return fail(@"El archivo no es una imagen IWi v13 válida.");
+    if (header.format != bo1::texture::IwiFormatDXT3)
+        return fail([NSString stringWithFormat:
+            @"Formato .iwi %u (%s) detectado. La vista todavía admite DXT3/BC2.",
+            unsigned(header.format), bo1::texture::IwiFormatName(header.format)]);
+
+    std::uint64_t offset = 0;
+    std::size_t compressedSize = 0;
+    if (!bo1::texture::IwiBC2TopMipRange(header, offset, compressedSize))
+        return fail(@"No se pudo encontrar el nivel principal DXT3/BC2. "
+            @"Las imágenes cúbicas, volumétricas o demasiado grandes aún no se admiten.");
+    std::vector<std::uint8_t> compressed(compressedSize);
+    stream.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    stream.read(reinterpret_cast<char*>(compressed.data()),
+        static_cast<std::streamsize>(compressed.size()));
+    if (!stream)
+        return fail(@"La textura DXT3 está incompleta.");
+    std::vector<std::uint8_t> rgba;
+    if (!bo1::texture::DecodeBC2RGBA(compressed.data(), compressed.size(),
+        header.width, header.height, rgba))
+        return fail(@"No fue posible descomprimir la imagen BC2.");
+
+    // CoreGraphics bitmap with premultiplied alpha, preserving transparency.
+    // The portable decoder returns straight RGBA, so premultiply exactly once.
+    for (std::size_t i = 0; i < rgba.size(); i += 4)
+    {
+        const unsigned alpha = rgba[i + 3];
+        for (unsigned channel = 0; channel < 3; ++channel)
+            rgba[i + channel] = static_cast<std::uint8_t>(
+                (unsigned(rgba[i + channel]) * alpha + 127u) / 255u);
+    }
+    NSData* bytes = [NSData dataWithBytes:rgba.data() length:rgba.size()];
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)bytes);
+    CGImageRef cgImage = nullptr;
+    if (colorSpace && provider)
+        cgImage = CGImageCreate(header.width, header.height, 8, 32,
+            std::size_t(header.width) * 4, colorSpace,
+            static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big),
+            provider, nullptr, false, kCGRenderingIntentDefault);
+    if (provider) CGDataProviderRelease(provider);
+    if (colorSpace) CGColorSpaceRelease(colorSpace);
+    if (!cgImage)
+        return fail(@"No se pudo crear la imagen de UIKit.");
+    UIImage* image = [UIImage imageWithCGImage:cgImage];
+    CGImageRelease(cgImage);
+
+    if (details)
+        *details = [NSString stringWithFormat:
+            @"Imagen IWI real reconstruida localmente\n\n"
+            "Versión: %u\nFormato: DXT3 / BC2\nResolución: %u × %u\n"
+            "Nivel principal: %zu bytes BC2\n"
+            "Píxeles RGBA8: %zu bytes\n\n"
+            "La imagen conserva su transparencia. No se usa Direct3D "
+            "ni se inicia una partida.",
+            unsigned(header.version), unsigned(header.width),
+            unsigned(header.height), compressedSize, rgba.size()];
+    return image;
+}
 
 static bool CheckNativeComponents(std::string& error)
 {
@@ -163,6 +253,25 @@ static bool CheckNativeComponents(std::string& error)
         || bc2Output[3] != 255)
     {
         error = "Version 13 IWi image and BC2 highest-resolution mip failed on ARM64";
+        return false;
+    }
+
+
+    // Exercise the very same IWI -> UIKit bridge used by the document picker,
+    // with a tiny synthetic image instead of any copyrighted game asset.
+    NSString* iwiPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"bo1-iwi-test-%@.iwi", NSUUID.UUID.UUIDString]];
+    NSData* iwiBytes = [NSData dataWithBytes:iwiFixture length:sizeof(iwiFixture)];
+    NSString* previewDetails = nil;
+    UIImage* preview = nil;
+    if ([iwiBytes writeToFile:iwiPath atomically:YES])
+        preview = IwiPreviewForPath(iwiPath.fileSystemRepresentation, &previewDetails);
+    [NSFileManager.defaultManager removeItemAtPath:iwiPath error:nullptr];
+    if (!preview || preview.size.width != 4 || preview.size.height != 4
+        || preview.CGImage == nil || CGImageGetBitsPerPixel(preview.CGImage) != 32
+        || previewDetails.length == 0)
+    {
+        error = "IWI file-to-UIKit RGBA8 preview failed on ARM64";
         return false;
     }
 
@@ -341,6 +450,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
 
 @interface BO1ViewController : UIViewController <UIDocumentPickerDelegate>
 @property(nonatomic, strong) UIButton* selectButton;
+@property(nonatomic, strong) UIButton* selectIwiButton;
+@property(nonatomic, strong) UIImageView* textureView;
 @property(nonatomic, strong) UILabel* stateLabel;
 @property(nonatomic, strong) UITextView* resultView;
 @property(nonatomic, strong) UIActivityIndicatorView* activity;
@@ -373,6 +484,23 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     self.selectButton.configuration = buttonConfiguration;
     [self.selectButton addTarget:self action:@selector(selectFastfile:) forControlEvents:UIControlEventTouchUpInside];
 
+    self.selectIwiButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIButtonConfiguration* iwiButton = [UIButtonConfiguration tintedButtonConfiguration];
+    iwiButton.title = @"Abrir textura .iwi";
+    iwiButton.cornerStyle = UIButtonConfigurationCornerStyleMedium;
+    self.selectIwiButton.configuration = iwiButton;
+    [self.selectIwiButton addTarget:self action:@selector(selectIwi:)
+        forControlEvents:UIControlEventTouchUpInside];
+
+    self.textureView = [[UIImageView alloc] init];
+    self.textureView.contentMode = UIViewContentModeScaleAspectFit;
+    self.textureView.backgroundColor = UIColor.secondarySystemBackgroundColor;
+    self.textureView.clipsToBounds = YES;
+    self.textureView.layer.cornerRadius = 12;
+    self.textureView.accessibilityIdentifier = @"iwiTexturePreview";
+    self.textureView.hidden = YES;
+    [self.textureView.heightAnchor constraintEqualToConstant:220].active = YES;
+
     self.stateLabel = [[UILabel alloc] init];
     self.stateLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
     self.stateLabel.adjustsFontForContentSizeCategory = YES;
@@ -381,6 +509,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     const bool nativeReady = CheckNativeComponents(nativeError);
     self.stateLabel.text = nativeReady ? @"Componentes nativos listos." : @"Falló la comprobación de los componentes.";
     self.selectButton.enabled = nativeReady;
+    self.selectIwiButton.enabled = nativeReady;
 
     self.activity = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     self.activity.hidesWhenStopped = YES;
@@ -401,7 +530,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
         : [NSString stringWithUTF8String:nativeError.c_str()];
 
     UIStackView* content = [[UIStackView alloc] initWithArrangedSubviews:
-        @[title, detail, self.selectButton, status, self.resultView]];
+        @[title, detail, self.selectButton, self.selectIwiButton,
+          status, self.textureView, self.resultView]];
     content.axis = UILayoutConstraintAxisVertical;
     content.spacing = 12;
     content.translatesAutoresizingMaskIntoConstraints = NO;
@@ -440,19 +570,37 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     [self presentViewController:picker animated:YES completion:nil];
 }
 
+- (void)selectIwi:(id)sender
+{
+    // Generic data type permits an unregistered .iwi from Files, including
+    // local copies imported from iCloud Drive or a Mac. Validate the suffix
+    // and the complete 48-byte IWi header before using it.
+    UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc]
+        initForOpeningContentTypes:@[UTTypeData] asCopy:NO];
+    picker.delegate = self;
+    picker.allowsMultipleSelection = NO;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
 - (void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls
 {
     NSURL* url = urls.firstObject;
     if (url == nil)
         return;
-    if ([url.pathExtension caseInsensitiveCompare:@"ff"] != NSOrderedSame)
+    const BOOL isIwi = [url.pathExtension caseInsensitiveCompare:@"iwi"] == NSOrderedSame;
+    const BOOL isFastfile = [url.pathExtension caseInsensitiveCompare:@"ff"] == NSOrderedSame;
+    if (!isIwi && !isFastfile)
     {
-        self.stateLabel.text = @"Seleccioná un archivo con extensión .ff.";
+        self.stateLabel.text = @"Seleccioná un archivo .ff o .iwi.";
         return;
     }
 
     self.selectButton.enabled = NO;
-    self.stateLabel.text = @"Leyendo y comprobando el archivo…";
+    self.selectIwiButton.enabled = NO;
+    self.textureView.image = nil;
+    self.textureView.hidden = YES;
+    self.stateLabel.text = isIwi ? @"Decodificando textura DXT3…" :
+        @"Leyendo y comprobando el archivo…";
     self.resultView.text = url.lastPathComponent;
     [self.activity startAnimating];
     // Keep access and coordination alive for the complete background read.
@@ -462,12 +610,19 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
         @autoreleasepool
         {
             __block NSString* text = nil;
+            __block UIImage* preview = nil;
             __block BOOL success = NO;
             NSError* coordinationError = nil;
             NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
             [coordinator coordinateReadingItemAtURL:url options:NSFileCoordinatorReadingWithoutChanges
                 error:&coordinationError byAccessor:^(NSURL* coordinatedURL) {
-                    text = InspectionTextForPath(coordinatedURL.fileSystemRepresentation, &success);
+                    if (isIwi)
+                    {
+                        preview = IwiPreviewForPath(coordinatedURL.fileSystemRepresentation, &text);
+                        success = preview != nil;
+                    }
+                    else
+                        text = InspectionTextForPath(coordinatedURL.fileSystemRepresentation, &success);
                 }];
             if (scoped)
                 [url stopAccessingSecurityScopedResource];
@@ -479,8 +634,13 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.resultView.text = text;
-                self.stateLabel.text = success ? @"Comprobación completada." : @"El archivo no pudo validarse.";
+                self.textureView.image = isIwi && success ? preview : nil;
+                self.textureView.hidden = !isIwi || !success;
+                self.stateLabel.text = success
+                    ? (isIwi ? @"Textura DXT3 reconstruida en iOS." : @"Comprobación completada.")
+                    : (isIwi ? @"No se pudo abrir la textura." : @"El archivo no pudo validarse.");
                 self.selectButton.enabled = YES;
+                self.selectIwiButton.enabled = YES;
                 [self.activity stopAnimating];
             });
         }

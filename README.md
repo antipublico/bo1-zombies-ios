@@ -121,6 +121,17 @@ highest-resolution **2D BC2** mip into an uncompressed preview:
 .\\bo1_fastfile_inspect.exe --decode-iwi "C:\\path\\to\\image.iwi" "preview.tga"
 ```
 
+The iOS development app now also accepts the user's .iwi image via the
+**Abrir textura .iwi** picker. For valid 2D IWi version-13/DXT3 files,
+it decodes the highest-resolution mip using the shared BC2 decoder, creates
+a premultiplied RGBA8 CoreGraphics image with original transparency, and
+previews that image in UIKit. The picker reads only the 48-byte header and
+the required top-mip blocks, via scoped/coordinated local file access.
+A synthetic .iwi file exercises this same file-to-UIKit bridge in the
+ARM64 native self-test. Other IWI formats and 3D/cubemap textures are
+rejected without falling back to incorrect decoding. This is a texture
+viewer, **not** Metal rendering or playable Zombies.
+
 The IWI decoder never changes the original game file. Cubemaps/volumes, other
 image codecs and loaded game engine materials are not supported by this
 diagnostic pathway.
