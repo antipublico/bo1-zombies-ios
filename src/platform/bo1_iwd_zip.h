@@ -66,7 +66,9 @@ inline bool Index(const std::filesystem::path& archive,
         // ZIP comment length must make this the final record.
         if(tailEnd+22+U16(tail.data()+tailEnd+20)!=tail.size())continue;
         const auto* e=tail.data()+tailEnd;
-        const auto count=U16(e+10), bytes=U32(e+12), offset=U32(e+16);
+        const std::uint16_t count=U16(e+10);
+        const std::uint32_t bytes=U32(e+12);
+        const std::uint32_t offset=U32(e+16);
         if(U16(e+4)!=0||U16(e+6)!=0||U16(e+8)!=count ||
            count==0xffff||bytes==0xffffffffu||offset==0xffffffffu||
            count>30000||std::uint64_t(offset)+bytes>size){
