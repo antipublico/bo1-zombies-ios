@@ -10,6 +10,7 @@ target_compile_options(bo1_ios PRIVATE -fobjc-arc)
 target_link_libraries(bo1_ios PRIVATE
     bo1_fastfile_inspection bo1_bytecode bo1_narrow32 bo1_steam_offline
     "-framework UIKit" "-framework Foundation" "-framework UniformTypeIdentifiers"
+    "-framework CoreGraphics"
 )
 set_target_properties(bo1_ios PROPERTIES
     OUTPUT_NAME BO1Zombies

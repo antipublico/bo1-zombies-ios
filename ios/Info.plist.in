@@ -73,6 +73,19 @@
                 <array><string>ff</string></array>
             </dict>
         </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.antipublico.bo1-iwi</string>
+            <key>UTTypeDescription</key>
+            <string>BO1 IWI Texture</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>iwi</string></array>
+            </dict>
+        </dict>
     </array>
 </dict>
 </plist>

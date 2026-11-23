@@ -499,7 +499,12 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     self.textureView.layer.cornerRadius = 12;
     self.textureView.accessibilityIdentifier = @"iwiTexturePreview";
     self.textureView.hidden = YES;
-    [self.textureView.heightAnchor constraintEqualToConstant:220].active = YES;
+    NSLayoutConstraint* imageHeight =
+        [self.textureView.heightAnchor constraintEqualToConstant:220];
+    // Allow UIStackView to collapse its hidden arranged subview without
+    // creating an unsatisfiable required height constraint.
+    imageHeight.priority = UILayoutPriorityDefaultHigh;
+    imageHeight.active = YES;
 
     self.stateLabel = [[UILabel alloc] init];
     self.stateLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
@@ -575,8 +580,9 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     // Generic data type permits an unregistered .iwi from Files, including
     // local copies imported from iCloud Drive or a Mac. Validate the suffix
     // and the complete 48-byte IWi header before using it.
+    UTType* type = [UTType typeWithIdentifier:@"com.antipublico.bo1-iwi"];
     UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc]
-        initForOpeningContentTypes:@[UTTypeData] asCopy:NO];
+        initForOpeningContentTypes:@[type ?: UTTypeData] asCopy:NO];
     picker.delegate = self;
     picker.allowsMultipleSelection = NO;
     [self presentViewController:picker animated:YES completion:nil];
