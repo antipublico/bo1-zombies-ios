@@ -226,6 +226,32 @@ def main():
         simctl("io", device_id, "screenshot", str(explore_png))
         if not explore_png.is_file() or explore_png.stat().st_size < 5000:
             raise RuntimeError("No simulator screenshot for first-person controls")
+        # Verify the Windows-compatible compact scene path (mesh+BC2 package)
+        # from an actual file into the UIKit/SceneKit scene and walking button.
+        pack_marker = data_container / "tmp" / "bo1-scene-pack-preview.json"
+        pack_marker.unlink(missing_ok=True)
+        simctl("launch", "--terminate-running-process", device_id, bundle_id,
+               "--fixture-packed-scene-preview")
+        deadline = time.monotonic() + 60
+        pack_report = None
+        while time.monotonic() < deadline:
+            if pack_marker.is_file():
+                pack_report = json.loads(pack_marker.read_text(encoding="utf-8"))
+                break
+            time.sleep(0.25)
+        if (pack_report is None or pack_report.get("status") != "pass"
+                or pack_report.get("mode") != "compact-scene"
+                or pack_report.get("mesh_count") != 2
+                or pack_report.get("walking_button") is not True
+                or pack_report.get("scrollable") is not True):
+            raise RuntimeError(f"Compact scene import or walking UI failed: {pack_report}")
+        (args.output / "scene-pack-preview.json").write_text(
+            json.dumps(pack_report, indent=2), encoding="utf-8")
+        time.sleep(2)
+        pack_png = args.output / "scene-pack-preview.png"
+        simctl("io", device_id, "screenshot", str(pack_png))
+        if not pack_png.is_file() or pack_png.stat().st_size < 5000:
+            raise RuntimeError("No compact scene UI screenshot")
         print("iOS native, IWI, 3D model, staged scene and walking HUD passed; screenshots saved.",
               flush=True)
     finally:
