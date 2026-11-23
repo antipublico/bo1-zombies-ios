@@ -108,6 +108,12 @@ if (BUILD_TESTING)
     target_compile_features(bo1_model_mesh_tests PRIVATE cxx_std_17)
     add_test(NAME model_mesh COMMAND bo1_model_mesh_tests)
 
+    add_executable(bo1_iwd_zip_tests tests/iwd_zip_tests.cpp)
+    target_include_directories(bo1_iwd_zip_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_iwd_zip_tests PRIVATE cxx_std_17)
+    target_link_libraries(bo1_iwd_zip_tests PRIVATE bo1_inspect_zlib)
+    add_test(NAME iwd_zip COMMAND bo1_iwd_zip_tests)
+
     add_executable(bo1_scene_pack_tests tests/scene_pack_tests.cpp)
     target_include_directories(bo1_scene_pack_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
     target_compile_features(bo1_scene_pack_tests PRIVATE cxx_std_17)
