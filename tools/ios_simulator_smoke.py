@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 import time
 
 
@@ -91,7 +92,52 @@ def main():
         simctl("launch", "--terminate-running-process", device_id, bundle_id, "--fixture-preview")
         time.sleep(3)
         simctl("io", device_id, "screenshot", str(args.output / "native-assets.png"))
-        print("iOS simulator self-test passed; startup screenshot saved.", flush=True)
+
+        # Decode a synthetic IWI through the document callback, wait for its
+        # completed layout, then independently check the actual screen pixels.
+        # A successful UIImage construction or a stale marker is insufficient.
+        iwi_marker = data_container / "tmp" / "bo1-iwi-preview.json"
+        iwi_marker.unlink(missing_ok=True)
+        simctl("launch", "--terminate-running-process", device_id, bundle_id, "--fixture-iwi-preview")
+        deadline = time.monotonic() + 60
+        report = None
+        while time.monotonic() < deadline:
+            if iwi_marker.is_file():
+                report = json.loads(iwi_marker.read_text(encoding="utf-8"))
+                break
+            time.sleep(0.25)
+        screenshot = args.output / "iwi-preview.png"
+        simctl("io", device_id, "screenshot", str(screenshot))
+        if report is None:
+            raise RuntimeError("No IWI preview layout marker was produced")
+        report_path = args.output / "iwi-preview.json"
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        if report.get("status") != "pass":
+            raise RuntimeError(f"IWI preview failed: {report}")
+
+        checker_source = Path(__file__).with_name("check_iwi_screenshot.swift")
+        with tempfile.TemporaryDirectory(prefix="bo1-screenshot-") as temporary:
+            checker = str(Path(temporary) / "check-iwi")
+            subprocess.run(["xcrun", "swiftc", str(checker_source), "-o", checker],
+                           check=True, timeout=120)
+            negative_checks = subprocess.run([checker, "--self-test"],
+                capture_output=True, text=True, timeout=30, check=True)
+            observations = [negative_checks.stdout, negative_checks.stderr]
+            deadline = time.monotonic() + 20
+            while True:
+                simctl("io", device_id, "screenshot", str(screenshot))
+                verified = subprocess.run([checker, str(screenshot), str(report_path)],
+                    capture_output=True, text=True, timeout=10)
+                observations.extend([verified.stdout, verified.stderr])
+                (args.output / "iwi-preview.log").write_text("\n".join(observations), encoding="utf-8")
+                if verified.returncode == 0:
+                    print(verified.stdout, flush=True)
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("IWI preview is not visibly correct in the simulator screenshot: "
+                                       + verified.stdout + verified.stderr)
+                time.sleep(0.5)
+        print("iOS native and IWI UI checks passed; screenshots saved.", flush=True)
     finally:
         simctl("shutdown", device_id, check=False)
         simctl("delete", device_id, check=False)

@@ -26,6 +26,86 @@
 
 static bool runSelfTest = false;
 static bool showFixturePreview = false;
+static bool showIwiFixturePreview = false;
+
+// Four large, uniform BC2 quadrants make screenshot sampling independent of
+// scaling/filtering at block boundaries. No original game pixels are used.
+static NSData* IwiPreviewFixture()
+{
+    constexpr size_t width = 128, height = 96;
+    std::vector<unsigned char> bytes(48 + width * height, 0);
+    bytes[0] = 'I'; bytes[1] = 'W'; bytes[2] = 'i';
+    bytes[3] = 13; bytes[4] = 12; bytes[5] = 0x10;
+    bo1::bytecode::Store<uint16_t>(bytes.data() + 6, width);
+    bo1::bytecode::Store<uint16_t>(bytes.data() + 8, height);
+    bo1::bytecode::Store<uint16_t>(bytes.data() + 10, 1);
+    bo1::bytecode::Store<uint32_t>(bytes.data() + 16, bytes.size());
+    bo1::bytecode::Store<uint32_t>(bytes.data() + 20, 48);
+    const uint16_t colors[] = {0xf800, 0x07e0, 0x001f, 0xffe0};
+    const unsigned char alpha[] = {0xff, 0x88, 0xff, 0x00};
+    for (size_t y = 0; y < height / 4; ++y)
+        for (size_t x = 0; x < width / 4; ++x)
+        {
+            const size_t quadrant = (y >= height / 8 ? 2 : 0) + (x >= width / 8 ? 1 : 0);
+            auto* block = bytes.data() + 48 + (y * (width / 4) + x) * 16;
+            std::memset(block, alpha[quadrant], 8);
+            bo1::bytecode::Store<uint16_t>(block + 8, colors[quadrant]);
+            bo1::bytecode::Store<uint16_t>(block + 10, colors[quadrant]);
+        }
+    return [NSData dataWithBytes:bytes.data() length:bytes.size()];
+}
+
+// The runner separately samples the simctl screenshot at these coordinates.
+// This marker checks decoded pixels and layout; it alone is not a UI pass.
+static NSDictionary* IwiFixtureLayoutReport(UIImageView* view)
+{
+    auto fail = [](NSString* reason) -> NSDictionary* {
+        return @{@"status": @"fail", @"error": reason};
+    };
+    UIWindow* window = view.window;
+    if (!window || window.hidden || view.hidden || view.alpha < 1 || !view.image.CGImage)
+        return fail(@"Texture view is hidden, detached or has no image");
+    for (UIView* ancestor = view.superview; ancestor; ancestor = ancestor.superview)
+        if (ancestor.hidden || ancestor.alpha < 1)
+            return fail(@"An ancestor hides the texture view");
+    CGImageRef image = view.image.CGImage;
+    if (CGImageGetWidth(image) != 128 || CGImageGetHeight(image) != 96
+        || CGImageGetBitsPerPixel(image) != 32 || CGImageGetBytesPerRow(image) != 128 * 4)
+        return fail(@"Unexpected synthetic image dimensions or pixel layout");
+    const uint8_t decoded[4][4] = {{255,0,0,255}, {0,136,0,136}, {0,0,255,255}, {0,0,0,0}};
+    CFDataRef data = CGDataProviderCopyData(CGImageGetDataProvider(image));
+    bool valid = data && CFDataGetLength(data) == 128 * 96 * 4;
+    if (valid)
+        for (size_t i = 0; i < 4; ++i)
+        {
+            const size_t x = i % 2 ? 96 : 32, y = i / 2 ? 72 : 24;
+            valid = valid && std::memcmp(CFDataGetBytePtr(data) + (y * 128 + x) * 4, decoded[i], 4) == 0;
+        }
+    if (data) CFRelease(data);
+    if (!valid) return fail(@"Synthetic colors or premultiplied alpha differ");
+
+    const CGFloat scale = MIN(view.bounds.size.width / 128, view.bounds.size.height / 96);
+    const CGSize size = CGSizeMake(128 * scale, 96 * scale);
+    const CGRect rect = CGRectMake((view.bounds.size.width - size.width) / 2,
+        (view.bounds.size.height - size.height) / 2, size.width, size.height);
+    const CGRect screenRect = [view convertRect:rect toView:window];
+    if (size.width < 64 || size.height < 48 || !CGRectContainsRect(window.bounds, screenRect))
+        return fail(@"Texture is too small or outside the visible window");
+    const uint8_t composited[4][4] = {{255,0,0,255}, {119,255,119,255}, {0,0,255,255}, {255,255,255,255}};
+    NSMutableArray* samples = [NSMutableArray array];
+    for (size_t i = 0; i < 4; ++i)
+    {
+        const CGPoint local = CGPointMake(rect.origin.x + size.width * (i % 2 ? .75 : .25),
+            rect.origin.y + size.height * (i / 2 ? .75 : .25));
+        const CGPoint point = [view convertPoint:local toView:window];
+        [samples addObject:@{@"u": @(point.x / window.bounds.size.width),
+            @"v": @(point.y / window.bounds.size.height),
+            @"rgba": @[@(composited[i][0]), @(composited[i][1]), @(composited[i][2]), @(composited[i][3])]}];
+    }
+    return @{@"status": @"pass", @"image_width": @128, @"image_height": @96,
+        @"window_width": @(window.bounds.size.width), @"window_height": @(window.bounds.size.height),
+        @"samples": samples};
+}
 
 // Read only the 48-byte IWI metadata and its largest BC2 mip from the
 // security-scoped file. UIKit receives a fully owned, premultiplied RGBA8
@@ -103,7 +183,7 @@ static UIImage* IwiPreviewForPath(const char* path, NSString** details)
 
     if (details)
         *details = [NSString stringWithFormat:
-            @"Imagen IWI real reconstruida localmente\n\n"
+            @"Textura IWI reconstruida localmente\n\n"
             "Versión: %u\nFormato: DXT3 / BC2\nResolución: %u × %u\n"
             "Nivel principal: %zu bytes BC2\n"
             "Píxeles RGBA8: %zu bytes\n\n"
@@ -455,6 +535,9 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
 @property(nonatomic, strong) UILabel* stateLabel;
 @property(nonatomic, strong) UITextView* resultView;
 @property(nonatomic, strong) UIActivityIndicatorView* activity;
+@property(nonatomic, strong) NSURL* iwiFixtureURL;
+@property(nonatomic) BOOL iwiFixtureStarted;
+- (void)finishIwiFixture:(BOOL)success;
 @end
 
 @implementation BO1ViewController
@@ -565,6 +648,42 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     }
 }
 
+- (void)viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+    if (!showIwiFixturePreview || self.iwiFixtureStarted) return;
+    self.iwiFixtureStarted = YES;
+    // A fixed white backing makes the alpha-compositing assertion deterministic
+    // in either appearance. The normal document picker retains its styling.
+    self.textureView.backgroundColor = UIColor.whiteColor;
+    self.iwiFixtureURL = [NSURL fileURLWithPath:[NSTemporaryDirectory()
+        stringByAppendingPathComponent:@"bo1-synthetic-preview.iwi"]];
+    if (![IwiPreviewFixture() writeToURL:self.iwiFixtureURL atomically:YES])
+    {
+        [self finishIwiFixture:NO];
+        return;
+    }
+    // Exercise the same coordinated background read and UI update as a picked
+    // document. The picker interaction itself is a separate manual test.
+    [self documentPicker:nil didPickDocumentsAtURLs:@[self.iwiFixtureURL]];
+}
+
+- (void)finishIwiFixture:(BOOL)success
+{
+    [NSFileManager.defaultManager removeItemAtURL:self.iwiFixtureURL error:nullptr];
+    self.iwiFixtureURL = nil;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.view.window layoutIfNeeded];
+        NSDictionary* report = success ? IwiFixtureLayoutReport(self.textureView)
+            : @{@"status": @"fail", @"error": self.resultView.text ?: @"Fixture read failed"};
+        NSData* json = [NSJSONSerialization dataWithJSONObject:report
+            options:NSJSONWritingPrettyPrinted error:nullptr];
+        NSString* marker = [NSTemporaryDirectory() stringByAppendingPathComponent:@"bo1-iwi-preview.json"];
+        if (![json writeToFile:marker atomically:YES])
+            NSLog(@"Could not write IWI preview marker");
+    });
+}
+
 - (void)selectFastfile:(id)sender
 {
     UTType* type = [UTType typeWithIdentifier:@"com.antipublico.bo1-fastfile"];
@@ -648,6 +767,11 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
                 self.selectButton.enabled = YES;
                 self.selectIwiButton.enabled = YES;
                 [self.activity stopAnimating];
+                if (showIwiFixturePreview && self.iwiFixtureURL)
+                {
+                    if (success) self.stateLabel.text = @"Textura sintética DXT3: colores y transparencia.";
+                    [self finishIwiFixture:success];
+                }
             });
         }
     });
@@ -721,6 +845,7 @@ int main(int argc, char* argv[])
         {
             runSelfTest = runSelfTest || std::strcmp(argv[index], "--self-test") == 0;
             showFixturePreview = showFixturePreview || std::strcmp(argv[index], "--fixture-preview") == 0;
+            showIwiFixturePreview = showIwiFixturePreview || std::strcmp(argv[index], "--fixture-iwi-preview") == 0;
         }
         return UIApplicationMain(argc, argv, nil, NSStringFromClass(BO1AppDelegate.class));
     }
