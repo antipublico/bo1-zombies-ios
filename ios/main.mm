@@ -207,6 +207,34 @@ static UIImage* IwiPreviewForPath(const char* path, NSString** details)
 }
 
 
+
+// Decode a single bounded BC2 top mip for the diagnostic SceneKit material.
+static UIImage* ScenePackTexture(std::uint32_t width, std::uint32_t height,
+                                 const std::vector<std::uint8_t>& compressed)
+{
+    std::vector<std::uint8_t> rgba;
+    if (!bo1::texture::DecodeBC2RGBA(compressed.data(), compressed.size(),
+                                    width, height, rgba)) return nil;
+    for (std::size_t i=0; i<rgba.size(); i+=4)
+        for (unsigned channel=0; channel<3; ++channel)
+            rgba[i+channel]=static_cast<std::uint8_t>(
+                (unsigned(rgba[i+channel])*unsigned(rgba[i+3])+127u)/255u);
+    NSData* data=[NSData dataWithBytes:rgba.data() length:rgba.size()];
+    CGColorSpaceRef space=CGColorSpaceCreateDeviceRGB();
+    CGDataProviderRef provider=CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
+    CGImageRef cg=nullptr;
+    if (space && provider)
+        cg=CGImageCreate(width,height,8,32,std::size_t(width)*4,space,
+            static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big),
+            provider,nullptr,false,kCGRenderingIntentDefault);
+    if (provider)CGDataProviderRelease(provider);
+    if (space)CGColorSpaceRelease(space);
+    if(!cg)return nil;
+    UIImage* image=[UIImage imageWithCGImage:cg];
+    CGImageRelease(cg);
+    return image;
+}
+
 // A Windows-made .bo1scene contains bounded LOD0 geometry and a BC2 top mip.
 // It deliberately contains no raw FastFile, engine VM or commercial map data.
 static bool LoadCompactScene(const char* path,
@@ -231,38 +259,21 @@ static bool LoadCompactScene(const char* path,
     std::string why;
     if (!bo1::scene_pack::Decode(file.data(), file.size(), *loaded, why))
         return fail([NSString stringWithFormat:@"Escena inválida: %s", why.c_str()]);
-    std::vector<std::uint8_t> rgba;
-    if (!bo1::texture::DecodeBC2RGBA(loaded->bc2.data(), loaded->bc2.size(),
-            loaded->width, loaded->height, rgba))
-        return fail(@"No se pudo decodificar la textura BC2.");
-    for (std::size_t i = 0; i < rgba.size(); i += 4)
-        for (unsigned ch = 0; ch < 3; ++ch)
-            rgba[i + ch] = static_cast<std::uint8_t>(
-                (unsigned(rgba[i + ch]) * unsigned(rgba[i + 3]) + 127u) / 255u);
-    NSData* data = [NSData dataWithBytes:rgba.data() length:rgba.size()];
-    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
-    CGImageRef cg = nullptr;
-    if (space && provider)
-        cg = CGImageCreate(loaded->width, loaded->height, 8, 32,
-            std::size_t(loaded->width) * 4, space,
-            static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big),
-            provider, nullptr, false, kCGRenderingIntentDefault);
-    if (provider) CGDataProviderRelease(provider);
-    if (space) CGColorSpaceRelease(space);
-    if (!cg) return fail(@"No se pudo crear la textura de la escena.");
-    UIImage* image = [UIImage imageWithCGImage:cg];
-    CGImageRelease(cg);
-    if (!image) return fail(@"Falló la imagen de UIKit.");
+    UIImage* image = ScenePackTexture(loaded->width, loaded->height, loaded->bc2);
+    if (!image) return fail(@"No se pudo reconstruir la primera textura BC2.");
+    for (const auto& tex : loaded->extraTextures)
+        if (!ScenePackTexture(tex.width, tex.height, tex.bc2))
+            return fail(@"No se pudo reconstruir una textura adicional.");
+
     package = std::move(loaded);
     if (preview) *preview = image;
     if (details)
         *details = [NSString stringWithFormat:
             @"Escena ligera cargada\n\nModelos: %zu\nTextura DXT3: %u × %u\n"
-            "Tamaño: %.1f KiB\n\nPodés tocar «Explorar caminando» para recorrer"
+            "Texturas: %zu\nTamaño: %.1f KiB\n\nPodés tocar «Explorar caminando» para recorrer"
             " la escena de diagnóstico. No es un mapa completo de BO1.",
             package->meshes.size(), package->width, package->height,
-            file.size() / 1024.0];
+            1 + package->extraTextures.size(), file.size() / 1024.0];
     return true;
 }
 
@@ -341,7 +352,7 @@ static SCNScene* SceneForMesh(const bo1::model::Mesh& mesh, UIImage* texture)
 // is applied to all mesh sources until per-material texture lookup exists.
 static SCNScene* SceneForArrangement(
     const std::vector<std::shared_ptr<bo1::model::Mesh>>& meshes,
-    UIImage* texture)
+    UIImage* texture, NSArray<UIImage*>* perMeshTextures = nil)
 {
     if (!texture || meshes.empty() || meshes.size() > bo1::scene::MaxSources)
         return nil;
@@ -360,9 +371,12 @@ static SCNScene* SceneForArrangement(
         return nil;
 
     NSMutableArray<SCNGeometry*>* geometries = [NSMutableArray arrayWithCapacity:meshes.size()];
-    for (const auto& mesh : meshes)
+    for (std::size_t i = 0; i < meshes.size(); ++i)
     {
-        SCNScene* prototype = SceneForMesh(*mesh, texture);
+        const auto& mesh = meshes[i];
+        UIImage* assigned = perMeshTextures && i < perMeshTextures.count
+            ? perMeshTextures[i] : texture;
+        SCNScene* prototype = SceneForMesh(*mesh, assigned);
         SCNGeometry* geometry = prototype.rootNode.childNodes.firstObject.geometry;
         if (!geometry) return nil;
         [geometries addObject:geometry];
@@ -803,6 +817,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 @property(nonatomic, strong) UIImageView* textureView;
 @property(nonatomic, strong) SCNView* sceneView;
 @property(nonatomic, strong) UIImage* modelTexture;
+@property(nonatomic, strong) NSArray<UIImage*>* perMeshTextures;
 @property(nonatomic, strong) UIButton* togglePreviewButton;
 @property(nonatomic, strong) UIButton* toggleSceneButton;
 @property(nonatomic, strong) UIButton* exploreButton;
@@ -1210,7 +1225,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     if (!self.sceneView.scene)
     {
         SCNScene* scene = self.showScene
-            ? SceneForArrangement(_sceneMeshes, self.modelTexture)
+            ? SceneForArrangement(_sceneMeshes, self.modelTexture, self.perMeshTextures)
             : SceneForMesh(*_modelMesh, self.modelTexture);
         if (!scene)
         {
@@ -1340,6 +1355,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     }
     else if (!append)
     {
+        self.perMeshTextures = nil;
         if (isScenePack) { self.textureView.image = nil; self.modelTexture = nil; }
         _modelMesh.reset();
         _sceneMeshes.clear();
@@ -1394,6 +1410,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                 self.resultView.text = text;
                 if (isIwi)
                 {
+                    self.perMeshTextures = nil;
                     self.modelTexture = success ? preview : nil;
                     self.textureView.image = self.modelTexture;
                 }
@@ -1401,6 +1418,19 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                 {
                     self.modelTexture = preview;
                     self.textureView.image = preview;
+                    NSMutableArray<UIImage*>* textures = [NSMutableArray array];
+                    for(std::size_t k=0; k<scenePackage->meshes.size(); ++k) {
+                        const auto slot = scenePackage->textureSlots.empty() ? 0u
+                            : scenePackage->textureSlots[k];
+                        UIImage* assigned = preview;
+                        if(slot>0 && slot<=scenePackage->extraTextures.size()) {
+                            const auto& tex=scenePackage->extraTextures[slot-1];
+                            assigned=ScenePackTexture(tex.width,tex.height,tex.bc2);
+                        }
+                        if(!assigned)assigned=preview;
+                        [textures addObject:assigned];
+                    }
+                    self.perMeshTextures = textures;
                     _sceneMeshes.clear();
                     for (const auto& mesh : scenePackage->meshes)
                         _sceneMeshes.push_back(std::make_shared<bo1::model::Mesh>(mesh));
