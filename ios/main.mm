@@ -1040,6 +1040,15 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
         sample.meshes.push_back(*SyntheticCrossedPlanes());
         sample.meshes.push_back(*SyntheticCrossedPlanes());
         sample.meshes.back().name = "synthetic second source";
+        bo1::scene_pack::Texture secondTexture{};
+        secondTexture.width = sample.width;
+        secondTexture.height = sample.height;
+        secondTexture.bc2 = sample.bc2;
+        // A distinct valid BC2 color creates separate GPU textures in V2.
+        for (std::size_t i=8; i<secondTexture.bc2.size(); i+=16)
+            secondTexture.bc2[i] ^= 0x1f;
+        sample.extraTextures.push_back(std::move(secondTexture));
+        sample.textureSlots = {0,1};
         std::vector<std::uint8_t> packed;
         std::string error;
         if (!bo1::scene_pack::Encode(sample, packed, error))
@@ -1155,10 +1164,12 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
             const BOOL uiReady = !self.exploreButton.hidden &&
                 self.exploreButton.window != nil && self.contentScrollView != nil &&
                 self.selectSceneButton.window != nil &&
-                _sceneMeshes.size() == 2 && self.showScene && self.showModel;
+                _sceneMeshes.size() == 2 && self.perMeshTextures.count == 2 &&
+                self.showScene && self.showModel;
             report = [report[@"status"] isEqualToString:@"pass"] && uiReady
                 ? @{@"status": @"pass", @"mode": @"compact-scene",
-                    @"mesh_count": @2, @"walking_button": @YES,
+                    @"mesh_count": @2, @"texture_count": @2,
+                    @"walking_button": @YES,
                     @"scrollable": @YES}
                 : @{@"status": @"fail", @"error": @"Compact scene / SE controls not reachable",
                     @"walking_button": @(uiReady)};
