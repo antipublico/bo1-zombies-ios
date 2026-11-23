@@ -56,6 +56,22 @@ public:
             native.type = disk.type;
             if (disk.serializedTag)
             {
+                if (disk.type == 5 && disk.serializedTag >= UINT32_MAX - 1)
+                {
+                    // XModel is the first unsupported root in Kino. Reading
+                    // its bounded TEMP header yields useful diagnostics but
+                    // cannot advance past its nested surfaces/materials yet.
+                    // Do not publish this as an engine-owned or usable asset.
+                    unsigned char modelDisk[XModelDiskHeaderSize];
+                    XModelHeader model{};
+                    if (!Header(modelDisk, sizeof(modelDisk)))
+                        return false;
+                    if (!DecodeXModelHeader(modelDisk, sizeof(modelDisk), model))
+                        return Fail("XModel header contains invalid bone, LOD or collision counts.");
+                    output.pendingXModel = model;
+                    output.stop = AssetStop::UnsupportedModelBody;
+                    break;
+                }
                 if (disk.type != 36 && disk.type != 37 && disk.type != 23 && disk.type != 7)
                 {
                     output.stop = AssetStop::UnsupportedType;
