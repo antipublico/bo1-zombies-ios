@@ -18,6 +18,7 @@
 #include <array>
 #include <thread>
 #include <memory>
+#include <map>
 #include <cstdio>
 
 // Local Windows GUI; picks user-owned .ff and .iwi. Export contains ONLY
@@ -224,122 +225,206 @@ bool ScanFolder(const std::filesystem::path& folder,
         });
     return true;
 }
+
 std::wstring AutomaticExport(const std::wstring& folder,
                              const std::wstring& destination) {
     ScanResults found;
     std::string error;
     if(!ScanFolder(folder,found,error))return L"Carpeta: "+Wide(error);
-    bo1::scene_pack::Package pack;
-    std::string wantedImage,firstFile;
+    struct Selected {
+        bo1::model::Mesh mesh;
+        std::string wanted, source;
+        std::size_t vertices=0, triangles=0;
+    };
+    std::vector<Selected> models;
     std::size_t attempted=0;
+    std::size_t estimatedMeshBytes=0;
     for(const auto& file:found.fastfiles) {
-        // Cap analysis, and stop after a usable first XModel. The original map
-        // geometry/placements cannot yet be decoded from GfxWorld.
-        if(++attempted>80)break;
+        if(++attempted>80 || models.size()>=bo1::scene_pack::MaxModels)break;
         bo1::fastfile::AssetPrefix prefix;
         bo1::fastfile::AssetLoadLimits limits;
         limits.previewFirstMaterialHeader=true;
         limits.previewFirstImageHeader=true;
-        const auto utf8=Utf8(file.wstring());
-        if(bo1::fastfile::LoadAssetPrefix(utf8.c_str(),prefix,error,limits)
-               !=bo1::fastfile::InspectionResult::Ok)continue;
+        const std::string path=Utf8(file.wstring());
+        if(bo1::fastfile::LoadAssetPrefix(path.c_str(),prefix,error,limits)
+            !=bo1::fastfile::InspectionResult::Ok)continue;
         bo1::model::Mesh mesh;
         if(!bo1::model::ExtractLOD0(prefix,mesh,error))continue;
-        if(mesh.vertices.size()>bo1::scene_pack::MaxVerticesPerModel||
+        if(mesh.vertices.size()>bo1::scene_pack::MaxVerticesPerModel ||
            mesh.indices.size()>bo1::scene_pack::MaxIndicesPerModel)continue;
-        if(firstFile.empty())firstFile=Utf8(file.filename().wstring());
-        if(wantedImage.empty()&&prefix.pendingXModelSkeleton&&
-           prefix.pendingXModelSkeleton->firstInlineMaterial&&
-           prefix.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage)
-            wantedImage=bo1::iwd::Lower(
-               prefix.pendingXModelSkeleton->firstInlineMaterial->
-               firstInlineImage->name);
-        pack.meshes.push_back(std::move(mesh));
-        // The current loader returns only one XModel root per FF.
-        // Restrict to one identifiable origin zone, not unrelated maps.
-        break;
+        const auto amount=16+mesh.name.size()+mesh.vertices.size()*20+
+                          mesh.indices.size()*4;
+        if(estimatedMeshBytes+amount>9u*1024u*1024u)continue;
+        Selected selected{};
+        selected.source=Utf8(file.filename().wstring());
+        selected.vertices=mesh.vertices.size();
+        selected.triangles=mesh.indices.size()/3;
+        if(prefix.pendingXModelSkeleton &&
+           prefix.pendingXModelSkeleton->firstInlineMaterial &&
+           prefix.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage) {
+            selected.wanted=bo1::iwd::Lower(
+                prefix.pendingXModelSkeleton->firstInlineMaterial->
+                firstInlineImage->name);
+        }
+        selected.mesh=std::move(mesh);
+        estimatedMeshBytes+=amount;
+        models.push_back(std::move(selected));
     }
-    if(pack.meshes.empty()){
+    if(models.empty()) {
         return L"Encontré "+std::to_wstring(found.fastfiles.size())+
-            L" archivos .ff, pero ninguno de los primeros "+std::to_wstring(attempted)+
-            L" expuso un XModel LOD0 compatible. No inventé una escena.\n"
-            L"Hay que ampliar el lector de GfxWorld/XModel para este juego.";
+            L" archivos FF, pero los primeros "+std::to_wstring(attempted)+
+            L" no expusieron geometría LOD0 compatible. No inventé modelos.";
     }
-    const std::string meshName=bo1::iwd::Lower(pack.meshes.front().name);
-    const std::string wanted=bo1::iwd::Lower(wantedImage);
-    std::string imageUsed;
-    bool exact=false;
-    auto score=[&](const std::string& name)->int{
-        if(!wanted.empty()&&name.find(wanted)!=std::string::npos)return 100;
-        const auto slash=wanted.find_last_of('/');
-        const auto shortname=slash==std::string::npos?wanted:wanted.substr(slash+1);
-        if(!shortname.empty()&&name.find(shortname)!=std::string::npos)return 90;
-        if(!meshName.empty()&&name.find(meshName)!=std::string::npos)return 70;
-        if(name.find("foliage")!=std::string::npos||
-           name.find("grass")!=std::string::npos)return 2;
-        return 0;
-    };
     struct Candidate {
-        int priority;
-        std::filesystem::path archive;
+        std::string name, key;
+        std::filesystem::path archive, loose;
         bo1::iwd::Entry entry;
-        std::filesystem::path loose;
+        std::uint32_t bytes=0;
     };
     std::vector<Candidate> candidates;
     for(const auto& img:found.images) {
-        candidates.push_back({score(bo1::iwd::Lower(Utf8(img.filename().wstring())))+1,
-                              {},{},img});
+        std::error_code ec;
+        const auto n=std::filesystem::file_size(img,ec);
+        if(!ec&&n<=2u*1024u*1024u) {
+            Candidate c{};
+            c.name=bo1::iwd::Lower(Utf8(img.filename().wstring()));
+            c.key=Utf8(img.wstring());
+            c.loose=img;
+            c.bytes=static_cast<std::uint32_t>(n);
+            candidates.push_back(std::move(c));
+        }
     }
-    // Read IWD directories only. Actual decompression happens for a selected
-    // image; no bulk extraction and no need to install a ZIP program.
+    // Reading IWD directories does not extract anything to disk. Only the
+    // texture ultimately used in the pack is decompressed, with CRC checking.
     for(const auto& archive:found.archives) {
         std::vector<bo1::iwd::Entry> images;
         if(!bo1::iwd::Index(archive,images,error))continue;
         for(const auto& e:images) {
-            if(e.original<=2u*1024u*1024u)
-                candidates.push_back({score(e.name),archive,e,{}});
+            if(e.original>2u*1024u*1024u)continue;
+            Candidate c{};
+            c.name=e.name;
+            c.key=Utf8(archive.wstring())+":"+e.name;
+            c.archive=archive;
+            c.entry=e;
+            c.bytes=e.original;
+            candidates.push_back(std::move(c));
         }
     }
-    std::sort(candidates.begin(),candidates.end(),
-        [](const Candidate& x,const Candidate& y){
-            if(x.priority!=y.priority)return x.priority>y.priority;
-            return x.entry.original<y.entry.original;
+    if(candidates.empty()) {
+        return L"Encontré "+std::to_wstring(models.size())+
+               L" modelos, pero no hay texturas .iwi elegibles en la carpeta/.iwd.";
+    }
+    bo1::scene_pack::Package pack;
+    std::map<std::string,std::uint32_t> textureIds;
+    std::vector<std::string> chosenTextures;
+    unsigned nameMatches=0, fallbackMatches=0;
+    std::size_t totalTextureBytes=0;
+    auto score=[&](const Selected& mesh,const Candidate& image)->int{
+        const std::string desired=bo1::iwd::Lower(mesh.wanted);
+        const std::string name=bo1::iwd::Lower(mesh.mesh.name);
+        if(!desired.empty()) {
+            const auto slash=desired.find_last_of('/');
+            const std::string leaf=slash==std::string::npos?desired:desired.substr(slash+1);
+            if(image.name==desired+".iwi" || image.name=="images/"+desired+".iwi"
+               || image.name==desired || image.name=="images/"+desired)
+                return 100;
+            if(!leaf.empty() && image.name.find(leaf)!=std::string::npos)
+                return 95;
+        }
+        if(!name.empty()&&image.name.find(name)!=std::string::npos)return 65;
+        return 0;
+    };
+    for(const auto& selected:models) {
+        std::vector<std::size_t> ranked(candidates.size());
+        for(std::size_t i=0;i<ranked.size();++i)ranked[i]=i;
+        std::sort(ranked.begin(),ranked.end(),[&](std::size_t a,std::size_t b){
+            const auto pa=score(selected,candidates[a]);
+            const auto pb=score(selected,candidates[b]);
+            if(pa!=pb)return pa>pb;
+            const auto alreadyA=textureIds.count(candidates[a].key)!=0;
+            const auto alreadyB=textureIds.count(candidates[b].key)!=0;
+            if(alreadyA!=alreadyB)return alreadyA;
+            return candidates[a].bytes<candidates[b].bytes;
         });
-    for(std::size_t i=0;i<candidates.size()&&i<250;++i) {
-        const auto& c=candidates[i];
-        bool valid=false;
-        if(!c.loose.empty()) {
-            valid=ReadLooseIwi(c.loose,pack,error);
-            if(valid)imageUsed=Utf8(c.loose.filename().wstring());
-        }else {
-            std::vector<std::uint8_t> image;
-            valid=bo1::iwd::Read(c.archive,c.entry,image,error)&&
-                 ReadIwiBytes(image,pack,error);
-            if(valid)imageUsed=c.entry.name;
+        bool chosen=false;
+        std::uint32_t slot=0;
+        for(std::size_t pass=0;pass<ranked.size()&&pass<160;++pass) {
+            const auto& candidate=candidates[ranked[pass]];
+            const auto matchScore=score(selected,candidate);
+            if(models.size()>1 && !selected.wanted.empty() &&
+               matchScore<90 && !textureIds.empty()) break; // do not guess a different texture
+            const auto existing=textureIds.find(candidate.key);
+            if(existing!=textureIds.end()) {
+                slot=existing->second;
+                chosen=true;
+            }else if(textureIds.size()<bo1::scene_pack::MaxModels &&
+                     totalTextureBytes+candidate.bytes<6u*1024u*1024u) {
+                bo1::scene_pack::Package image;
+                bool good=false;
+                if(!candidate.loose.empty()) {
+                    good=ReadLooseIwi(candidate.loose,image,error);
+                }else {
+                    std::vector<std::uint8_t> iwi;
+                    good=bo1::iwd::Read(candidate.archive,candidate.entry,iwi,error) &&
+                         ReadIwiBytes(iwi,image,error);
+                }
+                if(!good||totalTextureBytes+image.bc2.size()>6u*1024u*1024u)
+                    continue;
+                slot=static_cast<std::uint32_t>(textureIds.size());
+                if(slot==0) {
+                    pack.width=image.width;
+                    pack.height=image.height;
+                    pack.bc2=std::move(image.bc2);
+                }else {
+                    bo1::scene_pack::Texture tex{};
+                    tex.width=image.width;tex.height=image.height;
+                    tex.bc2=std::move(image.bc2);
+                    pack.extraTextures.push_back(std::move(tex));
+                }
+                totalTextureBytes+=slot==0?pack.bc2.size():pack.extraTextures.back().bc2.size();
+                textureIds.emplace(candidate.key,slot);
+                chosenTextures.push_back(candidate.name);
+                chosen=true;
+            }
+            if(chosen) {
+                if(matchScore>=90)++nameMatches;
+                else ++fallbackMatches;
+                break;
+            }
         }
-        if(valid){exact=c.priority>=90;break;}
+        if(!chosen) {
+            if(textureIds.empty())continue;
+            // A source with no resolved material uses the first known texture.
+            // This fallback is always reported as unverified in the GUI.
+            slot=0;
+            ++fallbackMatches;
+        }
+        pack.meshes.push_back(selected.mesh);
+        pack.textureSlots.push_back(slot);
     }
-    if(pack.bc2.empty()){
-        return L"Encontré un XModel en "+Wide(firstFile)+
-               L", pero ninguna textura DXT3 compatible dentro de los .iwd/.iwi.\n"
-               L"No generé un pack con texturas incorrectas.";
-    }
-    std::vector<std::uint8_t> encoded;
-    if(!bo1::scene_pack::Encode(pack,encoded,error))
-        return L"Modelo/textura exceden los límites del pack: "+Wide(error);
-    bo1::scene_pack::Package check;
-    if(!bo1::scene_pack::Decode(encoded.data(),encoded.size(),check,error))
-        return L"Error al verificar paquete: "+Wide(error);
-    std::ofstream out(std::filesystem::path(destination),
-                      std::ios::binary|std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(encoded.data()),encoded.size());
-    out.close();
-    if(!out)return L"No se pudo guardar el pack";
-    return L"PACK DE RECURSOS CREADO: "+std::to_wstring(encoded.size()/1024)+
-        L" KiB.\nFF: "+Wide(firstFile)+L"\nIWI: "+Wide(imageUsed)+
-        (exact?L" (vínculo sugerido por el material)":L" (asociación no verificada)")+
-        L"\nIMPORTANTE: contiene un modelo original y textura local, no una habitación"
-        L" de Zombies con posiciones originales. Todavía falta leer GfxWorld.";
+    if(pack.meshes.empty() || pack.bc2.empty())
+        return L"Los modelos fueron encontrados pero ninguna textura DXT3 válida"
+               L" pudo extraerse de los .iwd/.iwi. No se creó el paquete.";
+    std::vector<std::uint8_t> output;
+    if(!bo1::scene_pack::Encode(pack,output,error))
+        return L"El paquete supera los límites de tamaño: "+Wide(error);
+    bo1::scene_pack::Package verified;
+    if(!bo1::scene_pack::Decode(output.data(),output.size(),verified,error))
+        return L"Error validando el paquete: "+Wide(error);
+    std::ofstream file(std::filesystem::path(destination),std::ios::binary|std::ios::trunc);
+    file.write(reinterpret_cast<const char*>(output.data()),output.size());
+    file.close();
+    if(!file)return L"No se pudo escribir el .bo1scene";
+    std::wstring details=L"PAQUETE DE RECURSOS CREADO\n";
+    details+=std::to_wstring(pack.meshes.size())+L" modelos; "+
+             std::to_wstring(textureIds.size())+L" texturas; "+
+             std::to_wstring(output.size()/1024)+L" KiB.\n";
+    details+=L"Archivos FF examinados: "+std::to_wstring(attempted)+L".\n";
+    details+=L"Texturas por nombre de material: "+std::to_wstring(nameMatches)+
+             L"; asignaciones sin verificar: "+std::to_wstring(fallbackMatches)+L".\n";
+    details+=L"IMPORTANTE: no es una escena original del mapa. Los modelos se\n";
+    details+=L"muestran en posiciones de prueba; falta reconstruir GfxWorld.";
+    return details;
 }
 void StartAutoExport() {
     const auto folder=ChooseGameFolder();
@@ -347,7 +432,7 @@ void StartAutoExport() {
     auto save=Pick(true,L"Paquete para iPhone (*.bo1scene)\0*.bo1scene\0\0",L"bo1scene");
     if(save.empty())return;
     busy=true;UpdateLabels();
-    SetWindowTextW(statusLabel,L"Analizando carpeta: .ff y texturas dentro de .iwd...");
+    SetWindowTextW(statusLabel,L"Analizando FastFiles y asociaciones de texturas en IWD...");
     std::thread([folder,save](){
         auto value=std::make_unique<std::wstring>(AutomaticExport(folder,save));
         PostMessageW(windowHandle,Finished,0,
