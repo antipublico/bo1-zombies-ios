@@ -58,9 +58,11 @@ inline bool Index(const std::filesystem::path& archive,
     if(!ReadAt(f,size-readBytes,tail.data(),tail.size())){
         error="No se pudo leer directorio IWD";return false;
     }
-    std::size_t tailEnd=tail.size();
-    while(tailEnd>=22) {
-        --tailEnd;
+    // EOCD is at least 22 bytes: never probe U32 in the last three bytes.
+    // Walk backward from the earliest possible starting position.
+    for(std::int64_t candidate=static_cast<std::int64_t>(tail.size())-22;
+        candidate>=0;--candidate) {
+        const auto tailEnd=static_cast<std::size_t>(candidate);
         if(U32(tail.data()+tailEnd)!=0x06054b50u)continue;
         if(tailEnd+22>tail.size())continue;
         // ZIP comment length must make this the final record.
