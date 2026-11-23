@@ -107,6 +107,38 @@ int main()
         && decoded.collisionMapsTag == 0x80000011u
         && decoded.physicsConstraintsTag == UINT32_MAX - 1,
         "physics and collmap pointers");
+    const auto inlineBytes = CalculateXModelInlineBytes(decoded);
+    Check(inlineBytes.boneNames == 0 && inlineBytes.parentList == 6
+        && inlineBytes.quaternions == 0 && inlineBytes.translations == 0
+        && inlineBytes.classifications == 8 && inlineBytes.baseMatrices == 0,
+        "bone arrays count only explicit inline Win32 tags");
+    Check(inlineBytes.surfaceHeaders == 816 && inlineBytes.materialPointerArray == 48
+        && inlineBytes.collisionSurfaceHeaders == 132 && inlineBytes.boneInfo == 352
+        && inlineBytes.highMipBounds == 192 && inlineBytes.collisionMapHeaders == 8,
+        "fixed-size surface, collision and geometry array budgets");
+    Check(inlineBytes.Total() == 1562, "model fixed-size inline byte total");
+    auto extraInline = disk;
+    Put(extraInline, 8, UINT32_MAX);
+    Put(extraInline, 16, UINT32_MAX);
+    Put(extraInline, 20, UINT32_MAX);
+    Put(extraInline, 28, UINT32_MAX);
+    Put(extraInline, 32, 0u);
+    Put(extraInline, 36, 0u);
+    Put(extraInline, 172, 0u);
+    Put(extraInline, 184, 0u);
+    Put(extraInline, 220, 0u);
+    Put(extraInline, 244, 0u);
+    XModelHeader alternative;
+    Check(DecodeXModelHeader(extraInline.data() + 1, XModelDiskHeaderSize, alternative),
+        "decode skeletal-only inline model variant");
+    const auto alternativeBytes = CalculateXModelInlineBytes(alternative);
+    Check(alternativeBytes.boneNames == 16 && alternativeBytes.quaternions == 48
+        && alternativeBytes.translations == 96 && alternativeBytes.baseMatrices == 256,
+        "model skeletal payload respects native Win32 child byte counts");
+    Check(alternativeBytes.surfaceHeaders == 0 && alternativeBytes.materialPointerArray == 0
+        && alternativeBytes.collisionSurfaceHeaders == 0 && alternativeBytes.boneInfo == 0
+        && alternativeBytes.highMipBounds == 0 && alternativeBytes.collisionMapHeaders == 0,
+        "absent child arrays allocate no bytes");
     Check(!DecodeXModelHeader(disk.data() + 1, XModelDiskHeaderSize - 1, decoded)
         && decoded.nameTag == 0, "reject truncated buffer without publishing state");
     Check(!DecodeXModelHeader(nullptr, XModelDiskHeaderSize, decoded)
