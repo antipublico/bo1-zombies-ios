@@ -214,14 +214,14 @@ static SCNScene* SceneForMesh(const bo1::model::Mesh& mesh, UIImage* texture)
         geometrySourceWithData:packed
         semantic:SCNGeometrySourceSemanticVertex
         vectorCount:mesh.vertices.size()
-        usesFloatComponents:YES componentsPerVector:3
+        floatComponents:YES componentsPerVector:3
         bytesPerComponent:sizeof(float)
         dataOffset:0 dataStride:sizeof(bo1::model::Vertex)];
     SCNGeometrySource* uv = [SCNGeometrySource
         geometrySourceWithData:packed
         semantic:SCNGeometrySourceSemanticTexcoord
         vectorCount:mesh.vertices.size()
-        usesFloatComponents:YES componentsPerVector:2
+        floatComponents:YES componentsPerVector:2
         bytesPerComponent:sizeof(float)
         dataOffset:offsetof(bo1::model::Vertex, u)
         dataStride:sizeof(bo1::model::Vertex)];
@@ -449,8 +449,9 @@ static bool CheckNativeComponents(std::string& error)
     SCNScene* scene = SceneForMesh(*SyntheticCrossedPlanes(), preview);
     if (!scene || ![scene.rootNode childNodeWithName:@"BO1 preview camera"
         recursively:NO] || !scene.rootNode.childNodes.firstObject.geometry ||
-        scene.rootNode.childNodes.firstObject.geometry.sources.count != 2 ||
-        scene.rootNode.childNodes.firstObject.geometry.elements.count != 1)
+        [scene.rootNode.childNodes.firstObject.geometry
+            geometrySourcesForSemantic:SCNGeometrySourceSemanticVertex].count != 1 ||
+        scene.rootNode.childNodes.firstObject.geometry.geometryElementCount != 1)
     {
         error = "Synthetic textured LOD0 SceneKit geometry failed on ARM64";
         return false;
