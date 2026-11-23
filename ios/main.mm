@@ -259,7 +259,7 @@ static SCNScene* SceneForMesh(const bo1::model::Mesh& mesh, UIImage* texture)
     camera.name = @"BO1 preview camera";
     camera.camera = [SCNCamera camera];
     camera.camera.zNear = 0.01;
-    camera.camera.zFar = std::max(100.0f, double(radius) * 30.0);
+    camera.camera.zFar = std::max(100.0, static_cast<double>(radius) * 30.0);
     camera.camera.fieldOfView = 55;
     camera.position = SCNVector3Make(x + radius * 1.3f,
         y + radius * 0.9f, z + radius * 2.2f);
