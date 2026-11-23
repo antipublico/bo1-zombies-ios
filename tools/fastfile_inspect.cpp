@@ -114,6 +114,12 @@ int main(int argc, char** argv)
                 for (const auto& surf : skel.surfaceBodies)
                     missing += surf.unresolvedFields != 0;
                 std::printf("XModel surfaces with unresolved shared child references %zu\n", missing);
+                std::printf("XModel material slots %zu inline %u referenced %u empty %u (unresolved)\n",
+                    skel.materialHandleTags.size(), skel.inlineMaterials,
+                    skel.referencedMaterials, skel.emptyMaterialSlots);
+                for (size_t i = 0; i < skel.materialHandleTags.size() && i < 12; ++i)
+                    std::printf("XModel material slot %zu Win32 tag 0x%08" PRIx32 "\n",
+                        i, skel.materialHandleTags[i]);
                 for (size_t i = 0; i < skel.surfaceHeaders.size() && i < 12; ++i)
                 {
                     const auto& s = skel.surfaceHeaders[i];

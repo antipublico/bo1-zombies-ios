@@ -59,6 +59,13 @@ struct XModelSkeletonPreview
     uint64_t decodedGeometryBytes = 0;
     uint64_t declaredVertices = 0;
     uint64_t declaredTriangles = 0;
+    // Load_MaterialHandleArray reads its Win32 pointer-slot table before
+    // any nested Material payloads. These are raw tags, not native pointers.
+    std::vector<uint32_t> materialHandleTags;
+    uint64_t materialHandleBytes = 0;
+    uint32_t inlineMaterials = 0;
+    uint32_t referencedMaterials = 0;
+    uint32_t emptyMaterialSlots = 0;
 };
 
 struct NativeAsset

@@ -284,6 +284,9 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
                 static_cast<unsigned long long>(skel.declaredTriangles)];
             [text appendFormat:@"Bytes de geometría reconstruidos en CPU: %llu\n",
                 static_cast<unsigned long long>(skel.decodedGeometryBytes)];
+            [text appendFormat:@"Referencias a materiales: %zu (incrustadas: %u, compartidas: %u, vacías: %u)\n",
+                skel.materialHandleTags.size(), skel.inlineMaterials,
+                skel.referencedMaterials, skel.emptyMaterialSlots];
         }
     }
     [text appendString:@"\nLos shaders aún no se ejecutan en la GPU. El contenido todavía no está integrado en una partida."];

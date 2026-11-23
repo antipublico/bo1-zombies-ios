@@ -70,7 +70,8 @@ public:
                         return Fail("XModel header contains invalid bone, LOD or collision counts.");
                     XModelSkeletonPreview skeleton{};
                     if (!ModelSkeleton(model, skeleton)
-                        || !ModelSurfaceHeaders(model, skeleton))
+                        || !ModelSurfaceHeaders(model, skeleton)
+                        || !ModelMaterialHandles(model, skeleton))
                         return false;
                     output.pendingXModel = model;
                     output.pendingXModelSkeleton = std::move(skeleton);
@@ -416,6 +417,34 @@ private:
         }
         return SurfaceArray(surface.triIndicesTag, size_t(sizes.triangleIndices),
             16, preview.triangleIndices, preview, 16);
+    }
+
+    // The original Load_MaterialHandleArray consumes a contiguous array of
+    // 32-bit pointer tags first; only then does it recurse into each Material.
+    // Stop at the array boundary. Inline Material(-1/-2) and aliases need a
+    // nested loader and asset registry, and are deliberately NOT resolved.
+    bool ModelMaterialHandles(const XModelHeader& model, XModelSkeletonPreview& preview)
+    {
+        if (!model.materialsTag) return true;
+        const size_t count = model.numSurfaces;
+        const size_t bytes = count * sizeof(uint32_t);
+        if (!AdvanceBlock(bytes, 4)
+            || !Charge(bytes + count * sizeof(uint32_t)))
+            return false;
+        std::vector<unsigned char> disk(bytes);
+        if (bytes && !Read(disk.data(), bytes)) return false;
+        preview.materialHandleTags.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            const uint32_t tag = bytecode::Load<uint32_t>(disk.data() + i * 4);
+            preview.materialHandleTags.push_back(tag);
+            if (!tag) ++preview.emptyMaterialSlots;
+            else if (tag == UINT32_MAX || tag == UINT32_MAX - 1)
+                ++preview.inlineMaterials;
+            else ++preview.referencedMaterials;
+        }
+        preview.materialHandleBytes = bytes;
+        return true;
     }
 
     bool Raw(AssetNode& node)

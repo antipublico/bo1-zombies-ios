@@ -177,6 +177,7 @@ int main()
     Put32(modelPayload, modelStart + 176, 3);
     // Load_XSurfaceArray reads 12 serialized 68-byte headers as one block.
     modelPayload.insert(modelPayload.end(), 12 * XSurfaceDiskHeaderSize, 0);
+    modelPayload.insert(modelPayload.end(), 12 * 4, 0); // MaterialHandleArray(12).
     Put32(modelPayload, 0, static_cast<uint32_t>(modelPayload.size() - 36));
     load(modelPayload, InspectionResult::Ok);
     Check(result.stop == AssetStop::UnsupportedModelBody && result.nextAsset == 0
@@ -185,10 +186,13 @@ int main()
         && result.pendingXModelSkeleton->inlineArrayBytes == 0
         && result.pendingXModelSkeleton->surfaceHeaders.size() == 12
         && result.pendingXModelSkeleton->surfaceHeaderBytes == 816
+        && result.pendingXModelSkeleton->materialHandleTags.size() == 12
+        && result.pendingXModelSkeleton->emptyMaterialSlots == 12
+        && result.pendingXModelSkeleton->materialHandleBytes == 48
         && result.pendingXModel->numBones == 8 && result.pendingXModel->numSurfaces == 12
         && result.pendingXModel->numCollisionSurfaces == 3
-        && result.decodedAssetBytes == 252 + 816,
-        "XModel and surface headers preview stops before vertex data and materials");
+        && result.decodedAssetBytes == 252 + 816 + 48,
+        "XModel, surface headers and material handle tags stop before nested materials");
     Check(result.pendingXModel && CalculateXModelInlineBytes(*result.pendingXModel).surfaceHeaders == 816,
         "pending XModel metadata exposes bounded surface array estimate");
 
@@ -209,6 +213,7 @@ int main()
     for (size_t i = 0; i < 16 + 32 + 3 + 96; ++i)
         modelWithBones.push_back(static_cast<uint8_t>((i + 3) & 255));
     modelWithBones.insert(modelWithBones.end(), 12 * XSurfaceDiskHeaderSize, 0);
+    modelWithBones.insert(modelWithBones.end(), 12 * 4, 0);
     Put32(modelWithBones, 0, static_cast<uint32_t>(modelWithBones.size() - 36));
     load(modelWithBones, InspectionResult::Ok);
     Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->name == "model"
@@ -223,7 +228,7 @@ int main()
         && result.pendingXModelSkeleton->inlineArrayBytes == 155
         && result.pendingXModelSkeleton->unresolvedFields == 0
         && result.pendingXModelSkeleton->surfaceHeaders.size() == 12
-        && result.decodedAssetBytes == 252 + 6 + 155 + 816,
+        && result.decodedAssetBytes == 252 + 6 + 155 + 816 + 48,
         "XModel skeleton preview reads ordered inline children without Win32 pointer casts");
 
     auto referencedModel = modelPayload;
@@ -231,7 +236,7 @@ int main()
     load(referencedModel, InspectionResult::Ok);
     Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->unresolvedFields == 1u
         && result.pendingXModelSkeleton->boneNameBytes.empty()
-        && result.decodedAssetBytes == 252 + 816,
+        && result.decodedAssetBytes == 252 + 816 + 48,
         "referenced bone array remains unresolved without consuming FILE data");
 
     auto withGeometry = modelPayload;
@@ -255,8 +260,8 @@ int main()
     bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + surfStart + 6, 1);
     Put32(withInlineGeometry, surfStart + 32, UINT32_MAX);
     Put32(withInlineGeometry, surfStart + 12, UINT32_MAX);
-    const size_t firstVertex = withInlineGeometry.size();
-    withInlineGeometry.insert(withInlineGeometry.end(), 3 * 32 + 3 * 2, 0);
+    const size_t firstVertex = withInlineGeometry.size() - 12 * 4;
+    withInlineGeometry.insert(withInlineGeometry.begin() + firstVertex, 3 * 32 + 3 * 2, 0);
     bo1::bytecode::Store<float>(withInlineGeometry.data() + firstVertex, 1.5f);
     bo1::bytecode::Store<float>(withInlineGeometry.data() + firstVertex + 4, -2.25f);
     bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + firstVertex + 96, 0);
@@ -272,7 +277,7 @@ int main()
         && bo1::bytecode::Load<float>(result.pendingXModelSkeleton->surfaceBodies[0].packedVertices.data()) == 1.5f
         && bo1::bytecode::Load<uint16_t>(
             result.pendingXModelSkeleton->surfaceBodies[0].triangleIndices.data() + 4) == 2
-        && result.decodedAssetBytes == 252 + 816 + 102,
+        && result.decodedAssetBytes == 252 + 816 + 102 + 48,
         "XSurface inline vertices and triangle indices survive portable CPU reconstruction");
     auto truncatedGeometry = withInlineGeometry;
     truncatedGeometry.pop_back();
@@ -283,8 +288,8 @@ int main()
     auto withCollisionTree = modelPayload;
     withCollisionTree[surfStart + 1] = 1; // one XRigidVertList
     Put32(withCollisionTree, surfStart + 40, UINT32_MAX);
-    const size_t rigidBegin = withCollisionTree.size();
-    withCollisionTree.insert(withCollisionTree.end(), 12 + 40 + 16 + 2, 0);
+    const size_t rigidBegin = withCollisionTree.size() - 12 * 4;
+    withCollisionTree.insert(withCollisionTree.begin() + rigidBegin, 12 + 40 + 16 + 2, 0);
     Put32(withCollisionTree, rigidBegin + 8, UINT32_MAX);
     Put32(withCollisionTree, rigidBegin + 12 + 24, 1); // nodeCount
     Put32(withCollisionTree, rigidBegin + 12 + 28, 1); // node presence
@@ -306,6 +311,29 @@ int main()
     load(malformedSurface, InspectionResult::InvalidFormat);
     Check(!result.pendingXModel && !result.pendingXModelSkeleton,
         "invalid XSurface header does not leak partial model data");
+
+    // The recursive Material loader has not run yet. Verify the original
+    // pointer-slot ordering, including '-1' inline, '-2' inserted and alias.
+    auto taggedMaterials = modelPayload;
+    constexpr size_t materialStart = surfStart + 12 * XSurfaceDiskHeaderSize;
+    Put32(taggedMaterials, materialStart, UINT32_MAX);
+    Put32(taggedMaterials, materialStart + 4, UINT32_MAX - 1);
+    Put32(taggedMaterials, materialStart + 8, 0x80000011u);
+    load(taggedMaterials, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->materialHandleTags.size() == 12
+        && result.pendingXModelSkeleton->inlineMaterials == 2
+        && result.pendingXModelSkeleton->referencedMaterials == 1
+        && result.pendingXModelSkeleton->emptyMaterialSlots == 9
+        && result.pendingXModelSkeleton->materialHandleTags[0] == UINT32_MAX
+        && result.pendingXModelSkeleton->materialHandleTags[1] == UINT32_MAX - 1
+        && result.pendingXModelSkeleton->materialHandleTags[2] == 0x80000011u,
+        "XModel MaterialHandle array preserves Win32 tags without dereferencing them");
+    auto truncatedHandles = modelPayload;
+    truncatedHandles.pop_back();
+    Put32(truncatedHandles, 0, static_cast<uint32_t>(truncatedHandles.size() - 36));
+    load(truncatedHandles, InspectionResult::InvalidFormat);
+    Check(!result.pendingXModelSkeleton, "truncated material handle table never publishes preview");
 
     auto invalidModel = modelPayload;
     invalidModel[modelStart + 5] = 9; // More root bones than total bones.
