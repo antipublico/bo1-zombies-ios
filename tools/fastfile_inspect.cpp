@@ -1,18 +1,107 @@
 #include <database/fastfile_inspection.h>
 #include <database/fastfile_assets.h>
 #include <platform/bo1_texture_bc.h>
+#include <platform/bo1_iwi_image.h>
 #include <inttypes.h>
 #include <cstdio>
 #include <cstring>
 #include <set>
+#include <algorithm>
+#include <array>
+#include <fstream>
+#include <vector>
 
 int main(int argc, char** argv)
 {
     using namespace bo1::fastfile;
+    const bool iwiOnly = argc == 3 && std::strcmp(argv[1], "--inspect-iwi") == 0;
+    const bool iwiDecode = argc == 4 && std::strcmp(argv[1], "--decode-iwi") == 0;
+    if (iwiOnly || iwiDecode)
+    {
+        std::ifstream stream(argv[2], std::ios::binary | std::ios::ate);
+        if (!stream)
+        {
+            std::fprintf(stderr, "Could not open IWI image.\n");
+            return 1;
+        }
+        const auto last = stream.tellg();
+        if (last < static_cast<std::streamoff>(bo1::texture::IwiHeaderBytes))
+        {
+            std::fprintf(stderr, "IWI image is shorter than its 48-byte header.\n");
+            return 1;
+        }
+        const std::uint64_t total = static_cast<std::uint64_t>(last);
+        stream.seekg(0, std::ios::beg);
+        std::array<unsigned char, bo1::texture::IwiHeaderBytes> disk{};
+        stream.read(reinterpret_cast<char*>(disk.data()), disk.size());
+        bo1::texture::IwiHeader header{};
+        if (!stream || bo1::texture::ParseIwiHeader(disk.data(), disk.size(), total, header)
+                != bo1::texture::IwiParseResult::Ok)
+        {
+            std::fprintf(stderr, "IWI signature, version, dimensions or file lengths are invalid.\n");
+            return 1;
+        }
+        std::printf("IWI version %u format %u (%s) flags 0x%02x\n",
+            unsigned(header.version), unsigned(header.format),
+            bo1::texture::IwiFormatName(header.format), unsigned(header.flags));
+        std::printf("IWI dimensions %ux%ux%u gamma %.3f total bytes %" PRIu64 "\n",
+            unsigned(header.width), unsigned(header.height),
+            unsigned(header.depth), header.gamma, header.fileBytes);
+        std::printf("IWI picmip file bytes");
+        for (const auto s : header.fileSizeForPicmip) std::printf(" %" PRIu32, s);
+        std::printf("\n");
+        std::uint64_t begin = 0;
+        std::size_t compressedBytes = 0;
+        const bool topMip = bo1::texture::IwiBC2TopMipRange(
+            header, begin, compressedBytes);
+        if (topMip)
+            std::printf("IWI DXT3 highest-resolution mip offset %" PRIu64
+                " BC2 bytes %zu (can decode RGBA8)\n", begin, compressedBytes);
+        if (!iwiDecode) return 0;
+        if (!topMip)
+        {
+            std::fprintf(stderr, "This IWI cannot be decoded as a 2D DXT3/BC2 image.\n");
+            return 1;
+        }
+        std::vector<std::uint8_t> compressed(compressedBytes);
+        stream.seekg(static_cast<std::streamoff>(begin), std::ios::beg);
+        stream.read(reinterpret_cast<char*>(compressed.data()), compressed.size());
+        std::vector<std::uint8_t> rgba;
+        if (!stream || !bo1::texture::DecodeBC2RGBA(compressed.data(),
+            compressed.size(), header.width, header.height, rgba))
+        {
+            std::fprintf(stderr, "Could not decode the IWI BC2 pixels.\n");
+            return 1;
+        }
+        // Uncompressed, 32-bit BGRA TGA with top-left origin. No third-party
+        // image codec is needed; keep the source IWI untouched.
+        std::array<std::uint8_t, 18> tga{};
+        tga[2] = 2;
+        tga[12] = static_cast<std::uint8_t>(header.width);
+        tga[13] = static_cast<std::uint8_t>(header.width >> 8);
+        tga[14] = static_cast<std::uint8_t>(header.height);
+        tga[15] = static_cast<std::uint8_t>(header.height >> 8);
+        tga[16] = 32;
+        tga[17] = 0x28;
+        for (std::size_t i = 0; i < rgba.size(); i += 4)
+            std::swap(rgba[i], rgba[i + 2]);
+        std::ofstream result(argv[3], std::ios::binary | std::ios::trunc);
+        result.write(reinterpret_cast<const char*>(tga.data()), tga.size());
+        result.write(reinterpret_cast<const char*>(rgba.data()), rgba.size());
+        if (!result)
+        {
+            std::fprintf(stderr, "Could not write the TGA preview.\n");
+            return 1;
+        }
+        std::printf("IWI decoded to BGRA8 TGA at the requested output path.\n");
+        return 0;
+    }
     const bool loadAssets = argc == 3 && std::strcmp(argv[1], "--load-assets") == 0;
     if (argc != 2 && !loadAssets)
     {
-        std::fprintf(stderr, "Usage: bo1_fastfile_inspect [--load-assets] <zone.ff>\n");
+        std::fprintf(stderr, "Usage: bo1_fastfile_inspect [--load-assets] <zone.ff>\n"
+            "       bo1_fastfile_inspect --inspect-iwi <image.iwi>\n"
+            "       bo1_fastfile_inspect --decode-iwi <image.iwi> <preview.tga>\n");
         return 2;
     }
     Inspection inspection;
@@ -157,6 +246,9 @@ int main(int argc, char** argv)
                         std::printf("First inline GfxImage texture slot %zu name %s\n",
                             image.textureSlot,
                             image.name.empty() ? "(not resolved)" : image.name.c_str());
+                        if (image.category == 3 && !image.name.empty())
+                            std::printf("Expected external IWI path images/%s.iwi (may be inside an IWD archive)\n",
+                                image.name.c_str());
                         std::printf("First inline GfxImage dimensions %ux%ux%u levels %u mapType %u semantic %u category %u streaming %u\n",
                             unsigned(image.width), unsigned(image.height),
                             unsigned(image.depth), unsigned(image.levelCount),

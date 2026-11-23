@@ -7,6 +7,7 @@
 #include <database/db_xmodel_header.h>
 #include <database/db_xsurface_header.h>
 #include <platform/bo1_texture_bc.h>
+#include <platform/bo1_iwi_image.h>
 #include <platform/bo1_bytecode_io.h>
 #include <clientscript/cscr_bytecode.h>
 #include <steam/steam_api.h>
@@ -137,6 +138,31 @@ static bool CheckNativeComponents(std::string& error)
         || bc2Output[3] != 255)
     {
         error = "Direct3D DXT3 / BC2 texture CPU decoding failed on ARM64";
+        return false;
+    }
+
+    unsigned char iwiFixture[48 + 16]{};
+    iwiFixture[0] = 'I'; iwiFixture[1] = 'W'; iwiFixture[2] = 'i';
+    iwiFixture[3] = 13; iwiFixture[4] = 12; iwiFixture[5] = 0x10;
+    bo1::bytecode::Store<std::int16_t>(iwiFixture + 6, 4);
+    bo1::bytecode::Store<std::int16_t>(iwiFixture + 8, 4);
+    bo1::bytecode::Store<std::int16_t>(iwiFixture + 10, 1);
+    bo1::bytecode::Store<std::int32_t>(iwiFixture + 16, 64);
+    bo1::bytecode::Store<std::int32_t>(iwiFixture + 20, 48);
+    std::memcpy(iwiFixture + 48, bc2Block, 16);
+    bo1::texture::IwiHeader iwi{};
+    std::uint64_t iwiOffset = 0;
+    std::size_t iwiSize = 0;
+    if (bo1::texture::ParseIwiHeader(iwiFixture, 48, sizeof(iwiFixture), iwi)
+            != bo1::texture::IwiParseResult::Ok
+        || !bo1::texture::IwiBC2TopMipRange(iwi, iwiOffset, iwiSize)
+        || iwiOffset != 48 || iwiSize != 16
+        || !bo1::texture::DecodeBC2RGBA(
+            iwiFixture + iwiOffset, iwiSize, iwi.width, iwi.height, bc2Output)
+        || bc2Output.size() != 64 || bc2Output[0] != 255
+        || bc2Output[3] != 255)
+    {
+        error = "Version 13 IWi image and BC2 highest-resolution mip failed on ARM64";
         return false;
     }
 

@@ -108,6 +108,23 @@ The first real streaming image `~-gt5_foliage_desert_brush02_c` has
 512x512 dimensions with GfxTextureLoad=-2, texture resource length 0 and
 Direct3D format 861165636 (= FourCC `DXT3`, BC2). A zero-length inline
 resource is not a corrupted format; the actual pixel source remains unknown.
+The game's original `Image_LoadFromFile` looks for the image at
+`images/~-gt5_foliage_desert_brush02_c.iwi` (potentially inside a
+`.iwd` archive loaded by the game's virtual file system). The portable
+`IwiHeader` decoder reads the 48-byte `IWi` version-13 header, dimensions,
+flags and 8 picmip file-size fields. IWI file format 12 means DXT3/BC2.
+After extracting your own IWI into a local folder, inspect or convert its
+highest-resolution **2D BC2** mip into an uncompressed preview:
+
+```powershell
+.\\bo1_fastfile_inspect.exe --inspect-iwi "C:\\path\\to\\image.iwi"
+.\\bo1_fastfile_inspect.exe --decode-iwi "C:\\path\\to\\image.iwi" "preview.tga"
+```
+
+The IWI decoder never changes the original game file. Cubemaps/volumes, other
+image codecs and loaded game engine materials are not supported by this
+diagnostic pathway.
+
 The standalone `bo1::texture::DecodeBC2RGBA` CPU decoder can turn a
 properly sized BC2 block buffer into RGBA8 with bounded output, clipped
 edge blocks, and four-bit alpha. For 512x512 BC2 this would require
