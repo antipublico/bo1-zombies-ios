@@ -60,6 +60,56 @@ struct XModelHeader
     std::uint32_t physicsConstraintsTag = 0;
 };
 
+// The fixed-size inline arrays in db_load.cpp::Load_XModel, excluding strings,
+// nested surface payloads, materials, collision trees and physics subobjects.
+// These sizes are useful for preflight limits, not enough to reconstruct models.
+struct XModelInlineBytes
+{
+    std::uint64_t boneNames = 0;
+    std::uint64_t parentList = 0;
+    std::uint64_t quaternions = 0;
+    std::uint64_t translations = 0;
+    std::uint64_t classifications = 0;
+    std::uint64_t baseMatrices = 0;
+    std::uint64_t surfaceHeaders = 0;
+    std::uint64_t materialPointerArray = 0;
+    std::uint64_t collisionSurfaceHeaders = 0;
+    std::uint64_t boneInfo = 0;
+    std::uint64_t highMipBounds = 0;
+    std::uint64_t collisionMapHeaders = 0;
+
+    std::uint64_t Total() const noexcept
+    {
+        return boneNames + parentList + quaternions + translations
+            + classifications + baseMatrices + surfaceHeaders
+            + materialPointerArray + collisionSurfaceHeaders + boneInfo
+            + highMipBounds + collisionMapHeaders;
+    }
+};
+
+// These counts are uint8/validated nonnegative int32, and all products fit
+// uint64_t. Load_XModel tests some fields for -1 and others for any nonzero:
+// preserve that distinction when budgeting.
+inline XModelInlineBytes CalculateXModelInlineBytes(const XModelHeader& model) noexcept
+{
+    XModelInlineBytes bytes{};
+    const auto otherBones = std::uint64_t(model.numBones - model.numRootBones);
+    if (model.boneNamesTag == UINT32_MAX) bytes.boneNames = std::uint64_t(model.numBones) * 2;
+    if (model.parentListTag == UINT32_MAX) bytes.parentList = otherBones;
+    if (model.quaternionsTag == UINT32_MAX) bytes.quaternions = otherBones * 8;
+    if (model.translationsTag == UINT32_MAX) bytes.translations = otherBones * 16;
+    if (model.classificationsTag == UINT32_MAX) bytes.classifications = model.numBones;
+    if (model.baseMatricesTag == UINT32_MAX) bytes.baseMatrices = std::uint64_t(model.numBones) * 32;
+    if (model.surfacesTag) bytes.surfaceHeaders = std::uint64_t(model.numSurfaces) * 68;
+    if (model.materialsTag) bytes.materialPointerArray = std::uint64_t(model.numSurfaces) * 4;
+    if (model.collisionSurfacesTag && model.numCollisionSurfaces >= 0)
+        bytes.collisionSurfaceHeaders = std::uint64_t(model.numCollisionSurfaces) * 44;
+    if (model.boneInfoTag) bytes.boneInfo = std::uint64_t(model.numBones) * 44;
+    if (model.highMipBoundsTag) bytes.highMipBounds = std::uint64_t(model.numSurfaces) * 16;
+    if (model.collisionMapsTag) bytes.collisionMapHeaders = std::uint64_t(model.numCollisionMaps) * 4;
+    return bytes;
+}
+
 // Read exact Win32 byte offsets, not sizeof(XModel) on the current platform.
 // This only validates the independent header; child pointers, stream bounds,
 // materials and collision bodies must be checked by the later native loader.
