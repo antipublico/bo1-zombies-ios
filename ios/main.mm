@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <SceneKit/SceneKit.h>
 
 #include <database/db_fastfile_format.h>
 #include <database/fastfile_inspection.h>
@@ -8,6 +9,7 @@
 #include <database/db_xsurface_header.h>
 #include <platform/bo1_texture_bc.h>
 #include <platform/bo1_iwi_image.h>
+#include <platform/bo1_model_mesh.h>
 #include <platform/bo1_bytecode_io.h>
 #include <clientscript/cscr_bytecode.h>
 #include <steam/steam_api.h>
@@ -192,6 +194,74 @@ static UIImage* IwiPreviewForPath(const char* path, NSString** details)
             unsigned(header.version), unsigned(header.width),
             unsigned(header.height), compressedSize, rgba.size()];
     return image;
+}
+
+// A temporary native SceneKit preview of the *real* XModel LOD0 geometry.
+// It uses the iPhone's GPU through SceneKit/Metal, not BO1's D3D9 shaders.
+// Materials are not resolved: the user's selected IWI is applied to every
+// supported inline surface; the engine's material binding remains future work.
+static SCNScene* SceneForMesh(const bo1::model::Mesh& mesh, UIImage* texture)
+{
+    if (!texture || mesh.vertices.empty() || mesh.indices.empty())
+        return nil;
+    NSData* packed = [NSData dataWithBytes:mesh.vertices.data()
+        length:mesh.vertices.size() * sizeof(bo1::model::Vertex)];
+    SCNGeometrySource* positions = [SCNGeometrySource
+        geometrySourceWithData:packed
+        semantic:SCNGeometrySourceSemanticVertex
+        vectorCount:mesh.vertices.size()
+        usesFloatComponents:YES componentsPerVector:3
+        bytesPerComponent:sizeof(float)
+        dataOffset:0 dataStride:sizeof(bo1::model::Vertex)];
+    SCNGeometrySource* uv = [SCNGeometrySource
+        geometrySourceWithData:packed
+        semantic:SCNGeometrySourceSemanticTexcoord
+        vectorCount:mesh.vertices.size()
+        usesFloatComponents:YES componentsPerVector:2
+        bytesPerComponent:sizeof(float)
+        dataOffset:offsetof(bo1::model::Vertex, u)
+        dataStride:sizeof(bo1::model::Vertex)];
+    NSData* faces = [NSData dataWithBytes:mesh.indices.data()
+        length:mesh.indices.size() * sizeof(std::uint32_t)];
+    SCNGeometryElement* triangles = [SCNGeometryElement
+        geometryElementWithData:faces
+        primitiveType:SCNGeometryPrimitiveTypeTriangles
+        primitiveCount:mesh.indices.size() / 3
+        bytesPerIndex:sizeof(std::uint32_t)];
+    SCNGeometry* geo = [SCNGeometry geometryWithSources:@[positions, uv]
+        elements:@[triangles]];
+    SCNMaterial* mat = [SCNMaterial material];
+    mat.diffuse.contents = texture;
+    mat.lightingModelName = SCNLightingModelConstant;
+    mat.doubleSided = YES;
+    mat.transparencyMode = SCNTransparencyModeAOne;
+    mat.diffuse.wrapS = SCNWrapModeRepeat;
+    mat.diffuse.wrapT = SCNWrapModeRepeat;
+    geo.materials = @[mat];
+
+    SCNScene* scene = [SCNScene scene];
+    SCNNode* node = [SCNNode nodeWithGeometry:geo];
+    node.name = [NSString stringWithUTF8String:mesh.name.c_str()] ?: @"XModel LOD0";
+    [scene.rootNode addChildNode:node];
+
+    const float x = (mesh.mins[0] + mesh.maxs[0]) * 0.5f;
+    const float y = (mesh.mins[1] + mesh.maxs[1]) * 0.5f;
+    const float z = (mesh.mins[2] + mesh.maxs[2]) * 0.5f;
+    const float dx = mesh.maxs[0] - mesh.mins[0];
+    const float dy = mesh.maxs[1] - mesh.mins[1];
+    const float dz = mesh.maxs[2] - mesh.mins[2];
+    const float radius = std::max(0.2f, std::sqrt(dx * dx + dy * dy + dz * dz) * 0.5f);
+    SCNNode* camera = [SCNNode node];
+    camera.name = @"BO1 preview camera";
+    camera.camera = [SCNCamera camera];
+    camera.camera.zNear = 0.01;
+    camera.camera.zFar = std::max(100.0f, double(radius) * 30.0);
+    camera.camera.fieldOfView = 55;
+    camera.position = SCNVector3Make(x + radius * 1.3f,
+        y + radius * 0.9f, z + radius * 2.2f);
+    [camera lookAt:SCNVector3Make(x, y, z)];
+    [scene.rootNode addChildNode:camera];
+    return scene;
 }
 
 static bool CheckNativeComponents(std::string& error)
@@ -412,7 +482,8 @@ static bool CheckSyntheticFastfile(std::string& error)
     return true;
 }
 
-static NSString* InspectionTextForPath(const char* path, BOOL* success)
+static NSString* InspectionTextForPath(const char* path, BOOL* success,
+    std::shared_ptr<bo1::model::Mesh>* capturedMesh = nullptr)
 {
     bo1::fastfile::AssetPrefix prefix{};
     bo1::fastfile::AssetLoadLimits limits{};
@@ -423,6 +494,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     std::string error;
     const auto result = bo1::fastfile::LoadAssetPrefix(path, prefix, error, limits);
     *success = result == bo1::fastfile::InspectionResult::Ok;
+    if (capturedMesh) *capturedMesh = nullptr;
     if (!*success)
     {
         NSString* detail = [NSString stringWithUTF8String:error.c_str()];
@@ -524,20 +596,44 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
                 skel.referencedMaterials, skel.emptyMaterialSlots];
         }
     }
-    [text appendString:@"\nLos shaders aún no se ejecutan en la GPU. El contenido todavía no está integrado en una partida."];
+    [text appendString:@"\nLos shaders originales no se ejecutan en la GPU. El contenido todavía no está integrado en una partida."];
+    if (capturedMesh)
+    {
+        bo1::model::Mesh mesh;
+        std::string reason;
+        if (bo1::model::ExtractLOD0(prefix, mesh, reason))
+        {
+            [text appendFormat:@"\n\nMalla XModel LOD0 disponible: %s\n"
+                "Superficies: %zu | Vértices: %zu | Triángulos: %zu\n"
+                "Se usa la textura IWI seleccionada manualmente en todas las superficies.",
+                mesh.name.c_str(), mesh.surfaceCount,
+                mesh.vertices.size(), mesh.indices.size() / 3];
+            *capturedMesh = std::make_shared<bo1::model::Mesh>(std::move(mesh));
+        }
+        else
+            [text appendFormat:@"\n\nVista 3D no disponible: %s", reason.c_str()];
+    }
     return text;
 }
 
 @interface BO1ViewController : UIViewController <UIDocumentPickerDelegate>
+{
+    std::shared_ptr<bo1::model::Mesh> _modelMesh;
+}
 @property(nonatomic, strong) UIButton* selectButton;
 @property(nonatomic, strong) UIButton* selectIwiButton;
 @property(nonatomic, strong) UIImageView* textureView;
+@property(nonatomic, strong) SCNView* sceneView;
+@property(nonatomic, strong) UIImage* modelTexture;
+@property(nonatomic, strong) UIButton* togglePreviewButton;
+@property(nonatomic) BOOL showModel;
 @property(nonatomic, strong) UILabel* stateLabel;
 @property(nonatomic, strong) UITextView* resultView;
 @property(nonatomic, strong) UIActivityIndicatorView* activity;
 @property(nonatomic, strong) NSURL* iwiFixtureURL;
 @property(nonatomic) BOOL iwiFixtureStarted;
 - (void)finishIwiFixture:(BOOL)success;
+- (void)refresh3DPreview;
 @end
 
 @implementation BO1ViewController
@@ -589,6 +685,26 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     imageHeight.priority = UILayoutPriorityDefaultHigh;
     imageHeight.active = YES;
 
+    self.sceneView = [[SCNView alloc] init];
+    self.sceneView.backgroundColor = UIColor.secondarySystemBackgroundColor;
+    self.sceneView.layer.cornerRadius = 12;
+    self.sceneView.clipsToBounds = YES;
+    self.sceneView.allowsCameraControl = YES;
+    self.sceneView.accessibilityIdentifier = @"bo1Model3DPreview";
+    self.sceneView.hidden = YES;
+    NSLayoutConstraint* sceneHeight =
+        [self.sceneView.heightAnchor constraintEqualToConstant:300];
+    sceneHeight.priority = UILayoutPriorityDefaultHigh;
+    sceneHeight.active = YES;
+
+    self.togglePreviewButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIButtonConfiguration* toggleConfig = [UIButtonConfiguration plainButtonConfiguration];
+    toggleConfig.title = @"Ver textura plana";
+    self.togglePreviewButton.configuration = toggleConfig;
+    self.togglePreviewButton.hidden = YES;
+    [self.togglePreviewButton addTarget:self action:@selector(toggleModelPreview:)
+        forControlEvents:UIControlEventTouchUpInside];
+
     self.stateLabel = [[UILabel alloc] init];
     self.stateLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
     self.stateLabel.adjustsFontForContentSizeCategory = YES;
@@ -619,7 +735,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
 
     UIStackView* content = [[UIStackView alloc] initWithArrangedSubviews:
         @[title, detail, self.selectButton, self.selectIwiButton,
-          status, self.textureView, self.resultView]];
+          status, self.sceneView, self.textureView, self.togglePreviewButton,
+          self.resultView]];
     content.axis = UILayoutConstraintAxisVertical;
     content.spacing = 12;
     content.translatesAutoresizingMaskIntoConstraints = NO;
@@ -684,6 +801,41 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     });
 }
 
+- (void)refresh3DPreview
+{
+    const bool ready = _modelMesh && self.modelTexture;
+    self.togglePreviewButton.hidden = !ready;
+    if (!ready)
+    {
+        self.sceneView.hidden = YES;
+        self.sceneView.scene = nil;
+        self.textureView.hidden = self.textureView.image == nil;
+        return;
+    }
+    if (!self.sceneView.scene)
+    {
+        SCNScene* scene = SceneForMesh(*_modelMesh, self.modelTexture);
+        self.sceneView.scene = scene;
+        SCNNode* camera = [scene.rootNode childNodeWithName:@"BO1 preview camera"
+            recursively:NO];
+        self.sceneView.pointOfView = camera;
+    }
+    const BOOL show3D = self.showModel;
+    self.sceneView.hidden = !show3D;
+    self.textureView.hidden = show3D;
+    UIButtonConfiguration* config = self.togglePreviewButton.configuration;
+    config.title = show3D ? @"Ver textura plana" : @"Ver modelo 3D";
+    self.togglePreviewButton.configuration = config;
+    if (show3D)
+        self.stateLabel.text = @"Vista 3D: XModel real + textura IWI (giralo con el dedo).";
+}
+
+- (void)toggleModelPreview:(id)sender
+{
+    self.showModel = !self.showModel;
+    [self refresh3DPreview];
+}
+
 - (void)selectFastfile:(id)sender
 {
     UTType* type = [UTType typeWithIdentifier:@"com.antipublico.bo1-fastfile"];
@@ -722,8 +874,17 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
 
     self.selectButton.enabled = NO;
     self.selectIwiButton.enabled = NO;
-    self.textureView.image = nil;
-    self.textureView.hidden = YES;
+    if (isIwi)
+    {
+        self.textureView.image = nil;
+        self.modelTexture = nil;
+    }
+    else
+        _modelMesh.reset();
+    self.sceneView.scene = nil;
+    self.sceneView.hidden = YES;
+    self.togglePreviewButton.hidden = YES;
+    self.textureView.hidden = self.textureView.image == nil;
     self.stateLabel.text = isIwi ? @"Decodificando textura DXT3…" :
         @"Leyendo y comprobando el archivo…";
     self.resultView.text = url.lastPathComponent;
@@ -736,6 +897,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
         {
             __block NSString* text = nil;
             __block UIImage* preview = nil;
+            __block std::shared_ptr<bo1::model::Mesh> capturedMesh;
             __block BOOL success = NO;
             NSError* coordinationError = nil;
             NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
@@ -747,7 +909,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
                         success = preview != nil;
                     }
                     else
-                        text = InspectionTextForPath(coordinatedURL.fileSystemRepresentation, &success);
+                        text = InspectionTextForPath(coordinatedURL.fileSystemRepresentation,
+                            &success, &capturedMesh);
                 }];
             if (scoped)
                 [url stopAccessingSecurityScopedResource];
@@ -759,14 +922,21 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.resultView.text = text;
-                self.textureView.image = isIwi && success ? preview : nil;
-                self.textureView.hidden = !isIwi || !success;
+                if (isIwi)
+                {
+                    self.modelTexture = success ? preview : nil;
+                    self.textureView.image = self.modelTexture;
+                }
+                else
+                    _modelMesh = success ? capturedMesh : nullptr;
+                self.showModel = _modelMesh && self.modelTexture;
                 self.stateLabel.text = success
                     ? (isIwi ? @"Textura DXT3 reconstruida en iOS." : @"Comprobación completada.")
                     : (isIwi ? @"No se pudo abrir la textura." : @"El archivo no pudo validarse.");
                 self.selectButton.enabled = YES;
                 self.selectIwiButton.enabled = YES;
                 [self.activity stopAnimating];
+                [self refresh3DPreview];
                 if (showIwiFixturePreview && self.iwiFixtureURL)
                 {
                     if (success) self.stateLabel.text = @"Textura sintética DXT3: colores y transparencia.";
