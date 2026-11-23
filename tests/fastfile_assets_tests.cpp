@@ -155,6 +155,48 @@ int main()
     payload.push_back(0);
     Put32(payload, 0, payload.size() - 36);
     load(payload, InspectionResult::InvalidFormat);
+    // An XModel header is useful diagnostic evidence even before its
+    // surface/material child bodies are supported. Do not call it loaded.
+    Bytes modelPayload(36 + 16 + 8 + 252, 0);
+    Put32(modelPayload, 0, static_cast<uint32_t>(modelPayload.size() - 36));
+    Put32(modelPayload, 8, 252); // TEMP holds the 252-byte Win32 XModel.
+    Put32(modelPayload, 24, 4096); // Directory in stream block 4.
+    Put32(modelPayload, 36 + 8, 1); // One directory entry.
+    Put32(modelPayload, 36 + 12, UINT32_MAX);
+    Put32(modelPayload, 36 + 16, 5); // Asset type: XModel.
+    Put32(modelPayload, 36 + 20, UINT32_MAX); // Inline root.
+    constexpr size_t modelStart = 36 + 16 + 8;
+    modelPayload[modelStart + 4] = 8; // bones
+    modelPayload[modelStart + 5] = 2; // root bones
+    modelPayload[modelStart + 6] = 12; // surfaces
+    bo1::bytecode::Store<uint16_t>(modelPayload.data() + modelStart + 44, 12);
+    bo1::bytecode::Store<int16_t>(modelPayload.data() + modelStart + 216, 1);
+    Put32(modelPayload, modelStart + 32, UINT32_MAX); // Surface array.
+    Put32(modelPayload, modelStart + 36, UINT32_MAX); // Material pointers.
+    Put32(modelPayload, modelStart + 172, UINT32_MAX); // Collision surfaces.
+    Put32(modelPayload, modelStart + 176, 3);
+    load(modelPayload, InspectionResult::Ok);
+    Check(result.stop == AssetStop::UnsupportedModelBody && result.nextAsset == 0
+        && result.entries.empty() && result.pendingXModel.has_value()
+        && result.pendingXModel->numBones == 8 && result.pendingXModel->numSurfaces == 12
+        && result.pendingXModel->numCollisionSurfaces == 3
+        && result.decodedAssetBytes == 252,
+        "XModel header preview stops before unsupported geometry and materials");
+    Check(result.pendingXModel && CalculateXModelInlineBytes(*result.pendingXModel).surfaceHeaders == 816,
+        "pending XModel metadata exposes bounded surface array estimate");
+
+    auto invalidModel = modelPayload;
+    invalidModel[modelStart + 5] = 9; // More root bones than total bones.
+    load(invalidModel, InspectionResult::InvalidFormat);
+    Check(!result.pendingXModel, "invalid XModel header does not publish preview");
+
+    auto damagedModel = Pack(modelPayload);
+    damagedModel.back() ^= 1;
+    write(damagedModel);
+    Check(LoadAssetPrefix(path.string().c_str(), result, error) == InspectionResult::CorruptStream
+        && !result.pendingXModel && result.entries.empty(),
+        "late checksum failure discards pending XModel preview");
+
     std::printf("%u native asset checks, %u failures\n", checks, failures);
     return failures != 0;
 }
