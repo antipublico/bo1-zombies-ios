@@ -5,6 +5,7 @@
 #include <database/fastfile_inspection.h>
 #include <database/fastfile_assets.h>
 #include <database/db_xmodel_header.h>
+#include <database/db_xsurface_header.h>
 #include <platform/bo1_bytecode_io.h>
 #include <clientscript/cscr_bytecode.h>
 #include <steam/steam_api.h>
@@ -82,6 +83,40 @@ static bool CheckNativeComponents(std::string& error)
         || modelHeader.numBones != 0)
     {
         error = "Invalid XModel header was accepted or partially published";
+        return false;
+    }
+
+    // Surface metadata is a separate packed Win32 structure. Exercise the
+    // unaligned ARM64 path and the geometry-size calculator without shaders.
+    unsigned char surfaceBytes[bo1::fastfile::XSurfaceDiskHeaderSize + 1]{};
+    auto* surface = surfaceBytes + 1;
+    surface[1] = 1;
+    bo1::bytecode::Store<std::uint16_t>(surface + 4, 4);
+    bo1::bytecode::Store<std::uint16_t>(surface + 6, 2);
+    bo1::bytecode::Store<std::int16_t>(surface + 16, 2);
+    bo1::bytecode::Store<std::uint32_t>(surface + 24, UINT32_MAX);
+    bo1::bytecode::Store<std::uint32_t>(surface + 32, UINT32_MAX);
+    bo1::bytecode::Store<std::uint32_t>(surface + 40, UINT32_MAX);
+    bo1::bytecode::Store<std::uint32_t>(surface + 12, UINT32_MAX);
+    bo1::fastfile::XSurfaceHeader surfaceHeader{};
+    if (!bo1::fastfile::DecodeXSurfaceHeader(
+            surface, bo1::fastfile::XSurfaceDiskHeaderSize, surfaceHeader))
+    {
+        error = "Packed XSurface header decoder failed on ARM64";
+        return false;
+    }
+    const auto geometry = bo1::fastfile::CalculateXSurfaceInlineBytes(surfaceHeader);
+    if (geometry.blendIndices != 4 || geometry.packedVertices != 128
+        || geometry.rigidLists != 12 || geometry.triangleIndices != 12)
+    {
+        error = "Packed XSurface inline byte accounting failed";
+        return false;
+    }
+    bo1::bytecode::Store<std::int16_t>(surface + 16, -1);
+    if (bo1::fastfile::DecodeXSurfaceHeader(
+            surface, bo1::fastfile::XSurfaceDiskHeaderSize, surfaceHeader))
+    {
+        error = "Invalid XSurface blend counts were accepted";
         return false;
     }
 
