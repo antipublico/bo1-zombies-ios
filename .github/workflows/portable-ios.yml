@@ -27,6 +27,8 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           cmake --build build/host --parallel 3
           ctest --test-dir build/host --output-on-failure
+      - name: Check screenshot verifier before simulator boot
+        run: xcrun swift tools/check_iwi_screenshot.swift --self-test
       - name: Build iOS ARM64 app and libraries
         run: |
           cmake -S . -B build/ios -G Xcode \

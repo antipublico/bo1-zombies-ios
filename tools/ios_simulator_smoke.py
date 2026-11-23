@@ -121,8 +121,11 @@ def main():
             subprocess.run(["xcrun", "swiftc", str(checker_source), "-o", checker],
                            check=True, timeout=120)
             negative_checks = subprocess.run([checker, "--self-test"],
-                capture_output=True, text=True, timeout=30, check=True)
+                capture_output=True, text=True, timeout=30)
             observations = [negative_checks.stdout, negative_checks.stderr]
+            (args.output / "iwi-preview.log").write_text("\n".join(observations), encoding="utf-8")
+            if negative_checks.returncode:
+                raise RuntimeError("Screenshot checker self-test failed: " + "\n".join(observations))
             deadline = time.monotonic() + 20
             while True:
                 simctl("io", device_id, "screenshot", str(screenshot))
