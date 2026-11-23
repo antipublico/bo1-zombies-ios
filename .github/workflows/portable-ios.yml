@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# Keep only the newest validation when several commits land on a port branch.
+concurrency:
+  group: bo1-port-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   portable-and-ios:
     runs-on: macos-latest
