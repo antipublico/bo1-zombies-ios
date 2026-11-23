@@ -93,6 +93,11 @@ if (BUILD_TESTING)
     target_compile_features(bo1_iwi_image_tests PRIVATE cxx_std_17)
     add_test(NAME iwi_image COMMAND bo1_iwi_image_tests)
 
+    add_executable(bo1_model_mesh_tests tests/model_mesh_tests.cpp)
+    target_include_directories(bo1_model_mesh_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_model_mesh_tests PRIVATE cxx_std_17)
+    add_test(NAME model_mesh COMMAND bo1_model_mesh_tests)
+
     if (BO1_BUILD_FASTFILE_INSPECTOR)
         find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
         add_test(NAME fastfile_inspect
