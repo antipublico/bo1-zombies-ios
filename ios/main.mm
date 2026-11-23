@@ -12,6 +12,7 @@
 #include <platform/bo1_iwi_image.h>
 #include <platform/bo1_model_mesh.h>
 #include <platform/bo1_scene_layout.h>
+#include <platform/bo1_scene_pack.h>
 #include <platform/bo1_bytecode_io.h>
 #include <clientscript/cscr_bytecode.h>
 #include <steam/steam_api.h>
@@ -202,6 +203,66 @@ static UIImage* IwiPreviewForPath(const char* path, NSString** details)
             unsigned(header.version), unsigned(header.width),
             unsigned(header.height), compressedSize, rgba.size()];
     return image;
+}
+
+
+// A Windows-made .bo1scene contains bounded LOD0 geometry and a BC2 top mip.
+// It deliberately contains no raw FastFile, engine VM or commercial map data.
+static bool LoadCompactScene(const char* path,
+    std::shared_ptr<bo1::scene_pack::Package>& package,
+    UIImage** preview, NSString** details)
+{
+    auto fail = [&](NSString* message) -> bool {
+        if (details) *details = message;
+        return false;
+    };
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input) return fail(@"No se pudo abrir la escena .bo1scene.");
+    const auto end = input.tellg();
+    if (end < std::streamoff(32) ||
+        static_cast<std::uint64_t>(end) > bo1::scene_pack::MaxBytes)
+        return fail(@"La escena no es válida o supera 16 MiB.");
+    std::vector<std::uint8_t> file(static_cast<size_t>(end));
+    input.seekg(0, std::ios::beg);
+    input.read(reinterpret_cast<char*>(file.data()), file.size());
+    if (!input) return fail(@"No se pudo leer la escena completa.");
+    auto loaded = std::make_shared<bo1::scene_pack::Package>();
+    std::string why;
+    if (!bo1::scene_pack::Decode(file.data(), file.size(), *loaded, why))
+        return fail([NSString stringWithFormat:@"Escena inválida: %s", why.c_str()]);
+    std::vector<std::uint8_t> rgba;
+    if (!bo1::texture::DecodeBC2RGBA(loaded->bc2.data(), loaded->bc2.size(),
+            loaded->width, loaded->height, rgba))
+        return fail(@"No se pudo decodificar la textura BC2.");
+    for (std::size_t i = 0; i < rgba.size(); i += 4)
+        for (unsigned ch = 0; ch < 3; ++ch)
+            rgba[i + ch] = static_cast<std::uint8_t>(
+                (unsigned(rgba[i + ch]) * unsigned(rgba[i + 3]) + 127u) / 255u);
+    NSData* data = [NSData dataWithBytes:rgba.data() length:rgba.size()];
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
+    CGImageRef cg = nullptr;
+    if (space && provider)
+        cg = CGImageCreate(loaded->width, loaded->height, 8, 32,
+            std::size_t(loaded->width) * 4, space,
+            static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big),
+            provider, nullptr, false, kCGRenderingIntentDefault);
+    if (provider) CGDataProviderRelease(provider);
+    if (space) CGColorSpaceRelease(space);
+    if (!cg) return fail(@"No se pudo crear la textura de la escena.");
+    UIImage* image = [UIImage imageWithCGImage:cg];
+    CGImageRelease(cg);
+    if (!image) return fail(@"Falló la imagen de UIKit.");
+    package = std::move(loaded);
+    if (preview) *preview = image;
+    if (details)
+        *details = [NSString stringWithFormat:
+            @"Escena ligera cargada\n\nModelos: %zu\nTextura DXT3: %u × %u\n"
+            "Tamaño: %.1f KiB\n\nPodés tocar «Explorar caminando» para recorrer"
+            " la escena de diagnóstico. No es un mapa completo de BO1.",
+            package->meshes.size(), package->width, package->height,
+            file.size() / 1024.0];
+    return true;
 }
 
 // A temporary native SceneKit preview of the *real* XModel LOD0 geometry.
@@ -736,6 +797,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 }
 @property(nonatomic, strong) UIButton* selectButton;
 @property(nonatomic, strong) UIButton* selectIwiButton;
+@property(nonatomic, strong) UIButton* selectSceneButton;
+@property(nonatomic, strong) UIScrollView* contentScrollView;
 @property(nonatomic, strong) UIImageView* textureView;
 @property(nonatomic, strong) SCNView* sceneView;
 @property(nonatomic, strong) UIImage* modelTexture;
@@ -798,6 +861,16 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     [self.selectIwiButton addTarget:self action:@selector(selectIwi:)
         forControlEvents:UIControlEventTouchUpInside];
 
+
+    self.selectSceneButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIButtonConfiguration* scenePackConfig = [UIButtonConfiguration filledButtonConfiguration];
+    scenePackConfig.title = @"Abrir escena ligera .bo1scene";
+    scenePackConfig.baseBackgroundColor = [UIColor colorWithRed:0.14 green:0.36 blue:0.62 alpha:1];
+    self.selectSceneButton.configuration = scenePackConfig;
+    self.selectSceneButton.accessibilityIdentifier = @"bo1OpenCompactScene";
+    [self.selectSceneButton addTarget:self action:@selector(selectScenePackage:)
+        forControlEvents:UIControlEventTouchUpInside];
+
     self.textureView = [[UIImageView alloc] init];
     self.textureView.contentMode = UIViewContentModeScaleAspectFit;
     self.textureView.backgroundColor = UIColor.secondarySystemBackgroundColor;
@@ -806,7 +879,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     self.textureView.accessibilityIdentifier = @"iwiTexturePreview";
     self.textureView.hidden = YES;
     NSLayoutConstraint* imageHeight =
-        [self.textureView.heightAnchor constraintEqualToConstant:220];
+        [self.textureView.heightAnchor constraintEqualToConstant:
+            (UIScreen.mainScreen.bounds.size.height <= 700 ? 170 : 220)];
     // Allow UIStackView to collapse its hidden arranged subview without
     // creating an unsatisfiable required height constraint.
     imageHeight.priority = UILayoutPriorityDefaultHigh;
@@ -820,7 +894,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     self.sceneView.accessibilityIdentifier = @"bo1Model3DPreview";
     self.sceneView.hidden = YES;
     NSLayoutConstraint* sceneHeight =
-        [self.sceneView.heightAnchor constraintEqualToConstant:300];
+        [self.sceneView.heightAnchor constraintEqualToConstant:
+            (UIScreen.mainScreen.bounds.size.height <= 700 ? 215 : 300)];
     sceneHeight.priority = UILayoutPriorityDefaultHigh;
     sceneHeight.active = YES;
 
@@ -859,6 +934,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     self.stateLabel.text = nativeReady ? @"Componentes nativos listos." : @"Falló la comprobación de los componentes.";
     self.selectButton.enabled = nativeReady;
     self.selectIwiButton.enabled = nativeReady;
+    self.selectSceneButton.enabled = nativeReady;
     self.addModelButton.enabled = nativeReady;
 
     self.activity = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
@@ -879,22 +955,38 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
         ? @"Seleccioná un archivo .ff desde Archivos para comprobar su estructura.\n\nMemoria de 64 bits verificada.\nServicios Steam inactivos."
         : [NSString stringWithUTF8String:nativeError.c_str()];
 
+    // SE 2020 has a 667pt display: keep every control reachable by scrolling.
+    // Put the first-person action BEFORE the large 3D view, not below it.
     UIStackView* content = [[UIStackView alloc] initWithArrangedSubviews:
-        @[title, detail, self.selectButton, self.addModelButton,
-          self.selectIwiButton, status, self.toggleSceneButton, self.exploreButton,
-          self.togglePreviewButton, self.sceneView, self.textureView, self.resultView]];
+        @[title, detail, self.selectSceneButton, self.selectButton,
+          self.addModelButton, self.selectIwiButton, status,
+          self.exploreButton, self.toggleSceneButton, self.togglePreviewButton,
+          self.sceneView, self.textureView, self.resultView]];
     content.axis = UILayoutConstraintAxisVertical;
-    content.spacing = 12;
+    content.spacing = (UIScreen.mainScreen.bounds.size.height <= 700 ? 8 : 12);
     content.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:content];
+    self.contentScrollView = [[UIScrollView alloc] init];
+    self.contentScrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.contentScrollView.alwaysBounceVertical = YES;
+    self.contentScrollView.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+    [self.view addSubview:self.contentScrollView];
+    [self.contentScrollView addSubview:content];
     UILayoutGuide* safe = self.view.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
-        [content.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:20],
-        [content.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-20],
-        [content.topAnchor constraintEqualToAnchor:safe.topAnchor constant:16],
-        [content.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-16]
+        [self.contentScrollView.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
+        [self.contentScrollView.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
+        [self.contentScrollView.topAnchor constraintEqualToAnchor:safe.topAnchor],
+        [self.contentScrollView.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
+        [content.leadingAnchor constraintEqualToAnchor:self.contentScrollView.contentLayoutGuide.leadingAnchor constant:14],
+        [content.trailingAnchor constraintEqualToAnchor:self.contentScrollView.contentLayoutGuide.trailingAnchor constant:-14],
+        [content.topAnchor constraintEqualToAnchor:self.contentScrollView.contentLayoutGuide.topAnchor constant:10],
+        [content.bottomAnchor constraintEqualToAnchor:self.contentScrollView.contentLayoutGuide.bottomAnchor constant:-20],
+        [content.widthAnchor constraintEqualToAnchor:self.contentScrollView.frameLayoutGuide.widthAnchor constant:-28]
     ]];
-    [self.resultView setContentHuggingPriority:UILayoutPriorityDefaultLow - 1 forAxis:UILayoutConstraintAxisVertical];
+    // A fixed-width, scrollable result box cannot squeeze the buttons off screen.
+    NSLayoutConstraint* reportHeight = [self.resultView.heightAnchor constraintEqualToConstant:150];
+    reportHeight.priority = UILayoutPriorityDefaultHigh;
+    reportHeight.active = YES;
     if (showFixturePreview)
     {
         // CI-only launch flag: display the synthetic native assets to inspect
@@ -1161,6 +1253,17 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     [self presentViewController:picker animated:YES completion:nil];
 }
 
+- (void)selectScenePackage:(id)sender
+{
+    UTType* type = [UTType typeWithFilenameExtension:@"bo1scene"
+                                    conformingToType:UTTypeData];
+    UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc]
+        initForOpeningContentTypes:@[type ?: UTTypeData] asCopy:NO];
+    picker.delegate = self;
+    picker.allowsMultipleSelection = NO;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
 - (void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls
 {
     NSURL* url = urls.firstObject;
@@ -1168,9 +1271,10 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
         return;
     const BOOL isIwi = [url.pathExtension caseInsensitiveCompare:@"iwi"] == NSOrderedSame;
     const BOOL isFastfile = [url.pathExtension caseInsensitiveCompare:@"ff"] == NSOrderedSame;
-    if (!isIwi && !isFastfile)
+    const BOOL isScenePack = [url.pathExtension caseInsensitiveCompare:@"bo1scene"] == NSOrderedSame;
+    if (!isIwi && !isFastfile && !isScenePack)
     {
-        self.stateLabel.text = @"Seleccioná un archivo .ff o .iwi.";
+        self.stateLabel.text = @"Seleccioná un archivo .ff, .iwi o .bo1scene.";
         return;
     }
 
@@ -1179,6 +1283,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     self.selectButton.enabled = NO;
     self.addModelButton.enabled = NO;
     self.selectIwiButton.enabled = NO;
+    self.selectSceneButton.enabled = NO;
     if (isIwi)
     {
         self.textureView.image = nil;
@@ -1186,6 +1291,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     }
     else if (!append)
     {
+        if (isScenePack) { self.textureView.image = nil; self.modelTexture = nil; }
         _modelMesh.reset();
         _sceneMeshes.clear();
         self.showScene = NO;
@@ -1196,8 +1302,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
     self.toggleSceneButton.hidden = YES;
     self.exploreButton.hidden = YES;
     self.textureView.hidden = self.textureView.image == nil;
-    self.stateLabel.text = isIwi ? @"Decodificando textura DXT3…" :
-        @"Leyendo y comprobando el archivo…";
+    self.stateLabel.text = isScenePack ? @"Importando escena ligera…" :
+        (isIwi ? @"Decodificando textura DXT3…" : @"Leyendo y comprobando el archivo…");
     self.resultView.text = url.lastPathComponent;
     [self.activity startAnimating];
     // Keep access and coordination alive for the complete background read.
@@ -1209,6 +1315,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
             __block NSString* text = nil;
             __block UIImage* preview = nil;
             __block std::shared_ptr<bo1::model::Mesh> capturedMesh;
+            __block std::shared_ptr<bo1::scene_pack::Package> scenePackage;
             __block BOOL success = NO;
             NSError* coordinationError = nil;
             NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
@@ -1219,6 +1326,9 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                         preview = IwiPreviewForPath(coordinatedURL.fileSystemRepresentation, &text);
                         success = preview != nil;
                     }
+                    else if (isScenePack)
+                        success = LoadCompactScene(coordinatedURL.fileSystemRepresentation,
+                            scenePackage, &preview, &text);
                     else
                         text = InspectionTextForPath(coordinatedURL.fileSystemRepresentation,
                             &success, &capturedMesh);
@@ -1238,6 +1348,17 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                     self.modelTexture = success ? preview : nil;
                     self.textureView.image = self.modelTexture;
                 }
+                else if (isScenePack && success && scenePackage)
+                {
+                    self.modelTexture = preview;
+                    self.textureView.image = preview;
+                    _sceneMeshes.clear();
+                    for (const auto& mesh : scenePackage->meshes)
+                        _sceneMeshes.push_back(std::make_shared<bo1::model::Mesh>(mesh));
+                    _modelMesh = _sceneMeshes.front();
+                    self.showScene = YES;
+                    self.showModel = YES;
+                }
                 else if (success && capturedMesh)
                 {
                     if (_sceneMeshes.size() < bo1::scene::MaxSources)
@@ -1256,10 +1377,13 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                         @"\n\nNo se añadió otro modelo; se conservó la escena anterior."];
                 self.showModel = _modelMesh && self.modelTexture;
                 self.stateLabel.text = success
-                    ? (isIwi ? @"Textura DXT3 reconstruida en iOS." : @"Comprobación completada.")
-                    : (isIwi ? @"No se pudo abrir la textura." : @"El archivo no pudo validarse.");
+                    ? (isScenePack ? @"Escena ligera lista para explorar." :
+                        (isIwi ? @"Textura DXT3 reconstruida en iOS." : @"Comprobación completada."))
+                    : (isScenePack ? @"No se pudo importar la escena." :
+                        (isIwi ? @"No se pudo abrir la textura." : @"El archivo no pudo validarse."));
                 self.selectButton.enabled = YES;
                 self.selectIwiButton.enabled = YES;
+                self.selectSceneButton.enabled = YES;
                 self.addModelButton.enabled = _sceneMeshes.size() < bo1::scene::MaxSources;
                 [self.activity stopAnimating];
                 [self refresh3DPreview];
