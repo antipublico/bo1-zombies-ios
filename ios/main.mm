@@ -243,9 +243,28 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
         const char* type = prefix.nextAsset < inspection.assets.size()
             ? bo1::fastfile::AssetTypeName(inspection.assets[prefix.nextAsset].type) : "desconocido";
         NSString* reason = prefix.stop == bo1::fastfile::AssetStop::UnsupportedType
-            ? @"tipo aún no soportado" : @"referencia aún no resuelta";
+            ? @"tipo aún no soportado"
+            : (prefix.stop == bo1::fastfile::AssetStop::UnsupportedModelBody
+                ? @"modelo identificado; sus recursos internos aún no se cargan"
+                : @"referencia aún no resuelta");
         [text appendFormat:@"\nReconstrucción parcial. Detenida en índice %zu (base 0), %s: %@.\n"
             "Los recursos siguientes todavía no se reconstruyeron.\n", prefix.nextAsset, type, reason];
+    }
+    if (prefix.pendingXModel)
+    {
+        const auto& model = *prefix.pendingXModel;
+        const auto fixed = bo1::fastfile::CalculateXModelInlineBytes(model);
+        [text appendFormat:@"\nPrimer XModel pendiente\nHuesos: %u (raíz: %u)\n"
+            "Superficies: %u\nLOD: %d\nColisiones: %d\n"
+            "Arreglos internos fijos estimados: %.2f KiB\n"
+            "Esta información proviene del encabezado; no incluye texturas, "
+            "materiales ni geometría descomprimida.\n",
+            static_cast<unsigned>(model.numBones),
+            static_cast<unsigned>(model.numRootBones),
+            static_cast<unsigned>(model.numSurfaces),
+            static_cast<int>(model.numLods),
+            static_cast<int>(model.numCollisionSurfaces),
+            fixed.Total() / 1024.0];
     }
     [text appendString:@"\nLos shaders aún no se ejecutan en la GPU. El contenido todavía no está integrado en una partida."];
     return text;
