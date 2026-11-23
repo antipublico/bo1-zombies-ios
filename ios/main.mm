@@ -38,6 +38,7 @@ static bool showIwiFixturePreview = false;
 static bool showModelFixturePreview = false;
 static bool showSceneFixturePreview = false;
 static bool showExploreFixturePreview = false;
+static bool showPackedSceneFixturePreview = false;
 
 // Four large, uniform BC2 quadrants make screenshot sampling independent of
 // scaling/filtering at block boundaries. No original game pixels are used.
@@ -1007,9 +1008,41 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 {
     [super viewDidAppear:animated];
     if ((!showIwiFixturePreview && !showModelFixturePreview &&
-         !showSceneFixturePreview && !showExploreFixturePreview) ||
+         !showSceneFixturePreview && !showExploreFixturePreview &&
+         !showPackedSceneFixturePreview) ||
          self.iwiFixtureStarted) return;
     self.iwiFixtureStarted = YES;
+    if (showPackedSceneFixturePreview)
+    {
+        // Exercise the exact .bo1scene file-picker import used on a real iPhone,
+        // with small synthetic geometry and BC2 data. No game assets in CI.
+        bo1::scene_pack::Package sample;
+        sample.width = 128;
+        sample.height = 96;
+        NSData* iwi = IwiPreviewFixture();
+        const auto* raw = static_cast<const std::uint8_t*>(iwi.bytes);
+        sample.bc2.assign(raw + 48, raw + iwi.length);
+        sample.meshes.push_back(*SyntheticCrossedPlanes());
+        sample.meshes.push_back(*SyntheticCrossedPlanes());
+        sample.meshes.back().name = "synthetic second source";
+        std::vector<std::uint8_t> packed;
+        std::string error;
+        if (!bo1::scene_pack::Encode(sample, packed, error))
+        {
+            self.stateLabel.text = @"No se pudo preparar la escena sintética.";
+            return;
+        }
+        self.iwiFixtureURL = [NSURL fileURLWithPath:[NSTemporaryDirectory()
+            stringByAppendingPathComponent:@"bo1-test-scene.bo1scene"]];
+        NSData* file = [NSData dataWithBytes:packed.data() length:packed.size()];
+        if (![file writeToURL:self.iwiFixtureURL atomically:YES])
+        {
+            self.stateLabel.text = @"No se pudo guardar la escena sintética.";
+            return;
+        }
+        [self documentPicker:nil didPickDocumentsAtURLs:@[self.iwiFixtureURL]];
+        return;
+    }
     // A fixed white backing makes the alpha-compositing assertion deterministic
     // in either appearance. The normal document picker retains its styling.
     self.textureView.backgroundColor = UIColor.whiteColor;
@@ -1052,13 +1085,14 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
             : @{@"status": @"fail", @"error": self.resultView.text ?: @"Fixture read failed"};
         NSString* markerName = @"bo1-iwi-preview.json";
         if (showModelFixturePreview || showSceneFixturePreview ||
-        showExploreFixturePreview)
+            showExploreFixturePreview || showPackedSceneFixturePreview)
         {
             SCNNode* first = self.sceneView.scene.rootNode.childNodes.firstObject;
             // In the single-object preview the root child owns the geometry.
             // In the staged scene a transform anchor owns one geometry child.
             // Do not treat that valid parent anchor as an empty/blank scene.
-            const bool hasGeometry = (showSceneFixturePreview || showExploreFixturePreview)
+            const bool hasGeometry = (showSceneFixturePreview || showExploreFixturePreview ||
+                showPackedSceneFixturePreview)
                 ? first.childNodes.firstObject.geometry != nil
                 : first.geometry != nil;
             const bool rendered = success && self.sceneView.scene &&
@@ -1073,7 +1107,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                     @"width": @(self.sceneView.bounds.size.width)}
                 : @{@"status": @"fail", @"error": @"SceneKit model preview not visible"};
             markerName = @"bo1-model-preview.json";
-            if (showSceneFixturePreview || showExploreFixturePreview)
+            if (showSceneFixturePreview || showExploreFixturePreview ||
+                showPackedSceneFixturePreview)
             {
                 std::size_t instanceCount = 0;
                 BOOL hasGround = NO;
@@ -1099,6 +1134,20 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                         @"mesh_sources": @(_sceneMeshes.size())};
                 markerName = @"bo1-scene-preview.json";
             }
+        }
+        if (showPackedSceneFixturePreview)
+        {
+            const BOOL uiReady = !self.exploreButton.hidden &&
+                self.exploreButton.window != nil && self.contentScrollView != nil &&
+                self.selectSceneButton.window != nil &&
+                _sceneMeshes.size() == 2 && self.showScene && self.showModel;
+            report = [report[@"status"] isEqualToString:@"pass"] && uiReady
+                ? @{@"status": @"pass", @"mode": @"compact-scene",
+                    @"mesh_count": @2, @"walking_button": @YES,
+                    @"scrollable": @YES}
+                : @{@"status": @"fail", @"error": @"Compact scene / SE controls not reachable",
+                    @"walking_button": @(uiReady)};
+            markerName = @"bo1-scene-pack-preview.json";
         }
         // On a staged-scene failure, write the requested first-person marker
         // immediately instead of leaving CI to time out without a diagnosis.
@@ -1388,7 +1437,8 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                 [self.activity stopAnimating];
                 [self refresh3DPreview];
                 if ((showIwiFixturePreview || showModelFixturePreview ||
-                    showSceneFixturePreview || showExploreFixturePreview) &&
+                    showSceneFixturePreview || showExploreFixturePreview ||
+                    showPackedSceneFixturePreview) &&
                     self.iwiFixtureURL)
                 {
                     if (success) self.stateLabel.text = @"Textura sintética DXT3: colores y transparencia.";
@@ -1471,6 +1521,7 @@ int main(int argc, char* argv[])
             showModelFixturePreview = showModelFixturePreview || std::strcmp(argv[index], "--fixture-model-preview") == 0;
             showSceneFixturePreview = showSceneFixturePreview || std::strcmp(argv[index], "--fixture-scene-preview") == 0;
             showExploreFixturePreview = showExploreFixturePreview || std::strcmp(argv[index], "--fixture-explore-preview") == 0;
+            showPackedSceneFixturePreview = showPackedSceneFixturePreview || std::strcmp(argv[index], "--fixture-packed-scene-preview") == 0;
         }
         return UIApplicationMain(argc, argv, nil, NSStringFromClass(BO1AppDelegate.class));
     }
