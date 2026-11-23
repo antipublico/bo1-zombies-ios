@@ -72,6 +72,13 @@ Other local packages exercised actual shader programs and shared child objects.
 Native types still to implement include materials,
 images, models, animation, collision and sound.
 
+The next Kino model has 12 surfaces, four LODs and three collision surfaces.
+Adding XModel requires a TEMP stream stack for nested Material/TechniqueSet
+headers, aliases to nested asset-pointer slots, 16-byte surface alignment,
+material/image decoding and a representation for bone script-string IDs.
+The current root-only TEMP check must not be reused unchanged for nested assets.
+Geometry uploads and physics creation remain separate from CPU reconstruction.
+
 Configure the desktop engine with `-DBO1_WITH_STEAM=OFF` to link the static
 unavailable-service backend. It activates the engine's existing offline paths.
 The adapter reports unavailable services and keeps SDK callbacks inactive. Its
@@ -87,11 +94,11 @@ The table retains up to 255 distinct 16 MB address regions for the process lifet
 
 The manually triggered workflow in `.github/workflows/portable-ios.yml` runs
 host tests and builds the iOS development app on a macOS runner. The
-[native asset validation run](https://github.com/antipublico/bo1-zombies-ios/actions/runs/44962622259)
-passed on 2026-11-21 at commit `f40fff5`. All seven host tests passed with AddressSanitizer
+[technique graph validation run](https://github.com/antipublico/bo1-zombies-ios/actions/runs/45104724940)
+passed on 2026-11-23 at commit `30bba6c`. All eight host tests passed with AddressSanitizer
 and UndefinedBehaviorSanitizer on the C++ components. Xcode built and linked the
 ARM64 device executable with an iOS 15.0 deployment target, then the app passed
-its native component, synthetic-fastfile and native asset reconstruction checks
+its native component, synthetic-fastfile, text asset and technique graph reconstruction checks
 in an iPhone 16e simulator running iOS 26.2. Startup and synthetic-asset result
 screenshots were inspected. The run provides six
 static libraries, an unsigned development IPA, and simulator logs/screenshots.
@@ -106,7 +113,7 @@ passes, slot 129, typed backward aliases, inserted root aliases, shared literals
 program tokens, cleared GPU handles, lifetime after copies/moves, exact byte
 budgets and late checksum failures. All eight host suites passed locally with
 the technique loader; it also compiled for Windows x86 and passed a warning-free
-x64 compile. The Apple SDK and simulator validation for this addition is pending.
+x64 compile. The Apple SDK build and simulator validation also passed in the run above.
 
 The VM and compiler now share explicit little-endian scalar operand reads and
 writes. `Scr_ReadUnsigned` consumes four bytes on both x86 and ARM64, and packed
