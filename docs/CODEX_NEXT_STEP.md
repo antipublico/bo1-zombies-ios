@@ -54,3 +54,8 @@ See `.github/workflows/portable-ios.yml` for both iPhone device and simulator CI
 - [ ] `main` is unchanged. No proprietary game binaries, Apple signing secrets or credentials appear in any commit or artifact.
 
 **Important:** if no Mac/Apple SDK or iPhone signing access is available, finish all automation possible, document the limitation, and give the user the exact minimum step they must perform. No speculative claims of having launched the app on physical hardware.
+
+
+## Update: first native 3D model viewer (2026-11-23)
+
+Code now includes `src/platform/bo1_model_mesh.h` for safe, CPU-owned first-XModel LOD0 geometry extracted from existing `LoadAssetPrefix` (T5 VU half-float UVs, XSurface packed xyz/u16 indexed triangles) and a SceneKit-based iPhone diagnostic viewer that binds the user-selected DXT3/BC2 IWI to its supported surfaces. The model and texture pickers may be used in either order. The native 3D view supports orbit touch gestures and a switch back to 2D. CI adds CTest `model_mesh`, a synthetic crossed-planes preview `--fixture-model-preview` and screenshot `model-preview.png`. See current branch Actions for outcomes; do not assume success until green. Material selection/texture mapping, full XModel registry, skinning, physics and game rendering are still future work.

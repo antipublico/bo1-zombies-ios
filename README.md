@@ -240,3 +240,11 @@ logging, platform services and device-feature assumptions still need adaptation
 and testing. [HarkinianPad's implementation notes](https://github.com/chrissotraidis/harkinianpad/blob/main/docs/ios-feasibility-and-implementation-plan.md)
 provide an additional reference for mobile audio, input, sandbox paths and Apple
 build integration.
+
+## Primer visor 3D de geometría auténtica (desarrollo, iOS)
+
+El lector CPU reconstruye el primer XModel LOD0 soportado de un archivo `.ff` propio del usuario: posiciones float, triángulos indexados y coordenadas de textura T5 empaquetadas como mitades IEEE-754 (orden VU). Rechaza skinning, referencias de geometría faltantes, índices fuera de rango y valores no finitos. La aplicación usa **SceneKit** para mostrar la geometría del juego y aplica la **imagen `.iwi` que seleccionó el usuario** como textura sobre todas las superficies soportadas (no está implementada la vinculación automática de materiales).
+
+En el iPhone, copiá el `.ff` y su `.iwi` a Archivos. Abrí primero `Seleccionar archivo .ff` y después `Abrir textura .iwi` (también se pueden cargar en orden inverso). Si el LOD0 del primer modelo está completo, aparecerá la **vista 3D girable con el dedo** y un botón para alternar con la textura plana. Si no está disponible, la app muestra el motivo en los diagnósticos y mantiene el visor 2D. Es una primera vista de geometría, **no una partida**, y el material no corresponde necesariamente a todas las superficies ni al resto del mapa.
+
+CI valida el decodificador portátil con fixtures sintéticos y el pipeline iOS con `--fixture-model-preview` (captura `model-preview.png`). Esta captura **no usa assets originales del juego**; probar la geometría real sigue requiriendo que el usuario seleccione su propio `.ff` en un iPhone físico. La app se sigue distribuyendo como IPA de desarrollo sin firmar.

@@ -140,7 +140,30 @@ def main():
                     raise RuntimeError("IWI preview is not visibly correct in the simulator screenshot: "
                                        + verified.stdout + verified.stderr)
                 time.sleep(0.5)
-        print("iOS native and IWI UI checks passed; screenshots saved.", flush=True)
+        # Separate 3D UI smoke: synthetic crossed planes textured by the same
+        # portable IWI decode path. Real-game meshes are never checked into CI.
+        model_marker = data_container / "tmp" / "bo1-model-preview.json"
+        model_marker.unlink(missing_ok=True)
+        simctl("launch", "--terminate-running-process", device_id, bundle_id,
+               "--fixture-model-preview")
+        deadline = time.monotonic() + 60
+        model_report = None
+        while time.monotonic() < deadline:
+            if model_marker.is_file():
+                model_report = json.loads(model_marker.read_text(encoding="utf-8"))
+                break
+            time.sleep(0.25)
+        if model_report is None or model_report.get("status") != "pass":
+            raise RuntimeError(f"3D textured model UI preview did not initialize: {model_report}")
+        (args.output / "model-preview.json").write_text(
+            json.dumps(model_report, indent=2), encoding="utf-8")
+        time.sleep(3)  # Let the SceneKit GPU render at least a few frames.
+        model_png = args.output / "model-preview.png"
+        simctl("io", device_id, "screenshot", str(model_png))
+        if not model_png.is_file() or model_png.stat().st_size < 5000:
+            raise RuntimeError("3D model screenshot was not captured")
+        print("iOS native, IWI UI and 3D SceneKit UI checks passed; screenshots saved.",
+              flush=True)
     finally:
         simctl("shutdown", device_id, check=False)
         simctl("delete", device_id, check=False)

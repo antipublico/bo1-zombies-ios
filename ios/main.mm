@@ -18,6 +18,9 @@
 #include "../tests/techset_fixture.h"
 
 #include <array>
+#include <algorithm>
+#include <cmath>
+#include <memory>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +32,7 @@
 static bool runSelfTest = false;
 static bool showFixturePreview = false;
 static bool showIwiFixturePreview = false;
+static bool showModelFixturePreview = false;
 
 // Four large, uniform BC2 quadrants make screenshot sampling independent of
 // scaling/filtering at block boundaries. No original game pixels are used.
@@ -264,6 +268,23 @@ static SCNScene* SceneForMesh(const bo1::model::Mesh& mesh, UIImage* texture)
     return scene;
 }
 
+static std::shared_ptr<bo1::model::Mesh> SyntheticCrossedPlanes()
+{
+    // Only a screenshot fixture. This geometry is deliberately invented;
+    // actual BO1 geometry is loaded by ExtractLOD0 from a user-supplied .ff.
+    auto mesh = std::make_shared<bo1::model::Mesh>();
+    mesh->name = "synthetic crossed foliage";
+    mesh->vertices = {
+        {-1,-1,0,0,1}, {1,-1,0,1,1}, {1,1,0,1,0}, {-1,1,0,0,0},
+        {0,-1,-1,0,1}, {0,-1,1,1,1}, {0,1,1,1,0}, {0,1,-1,0,0}
+    };
+    mesh->indices = {0,1,2,0,2,3,4,5,6,4,6,7};
+    mesh->mins[0] = mesh->mins[1] = mesh->mins[2] = -1;
+    mesh->maxs[0] = mesh->maxs[1] = mesh->maxs[2] = 1;
+    mesh->surfaceCount = 2;
+    return mesh;
+}
+
 static bool CheckNativeComponents(std::string& error)
 {
     static_assert(sizeof(void*) == 8, "The iOS host requires a 64-bit ABI");
@@ -422,6 +443,16 @@ static bool CheckNativeComponents(std::string& error)
         || previewDetails.length == 0)
     {
         error = "IWI file-to-UIKit RGBA8 preview failed on ARM64";
+        return false;
+    }
+
+    SCNScene* scene = SceneForMesh(*SyntheticCrossedPlanes(), preview);
+    if (!scene || ![scene.rootNode childNodeWithName:@"BO1 preview camera"
+        recursively:NO] || !scene.rootNode.childNodes.firstObject.geometry ||
+        scene.rootNode.childNodes.firstObject.geometry.sources.count != 2 ||
+        scene.rootNode.childNodes.firstObject.geometry.elements.count != 1)
+    {
+        error = "Synthetic textured LOD0 SceneKit geometry failed on ARM64";
         return false;
     }
 
@@ -768,11 +799,16 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
 - (void)viewDidAppear:(BOOL)animated
 {
     [super viewDidAppear:animated];
-    if (!showIwiFixturePreview || self.iwiFixtureStarted) return;
+    if ((!showIwiFixturePreview && !showModelFixturePreview) || self.iwiFixtureStarted) return;
     self.iwiFixtureStarted = YES;
     // A fixed white backing makes the alpha-compositing assertion deterministic
     // in either appearance. The normal document picker retains its styling.
     self.textureView.backgroundColor = UIColor.whiteColor;
+    if (showModelFixturePreview)
+    {
+        _modelMesh = SyntheticCrossedPlanes();
+        self.showModel = YES;
+    }
     self.iwiFixtureURL = [NSURL fileURLWithPath:[NSTemporaryDirectory()
         stringByAppendingPathComponent:@"bo1-synthetic-preview.iwi"]];
     if (![IwiPreviewFixture() writeToURL:self.iwiFixtureURL atomically:YES])
@@ -793,9 +829,26 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
         [self.view.window layoutIfNeeded];
         NSDictionary* report = success ? IwiFixtureLayoutReport(self.textureView)
             : @{@"status": @"fail", @"error": self.resultView.text ?: @"Fixture read failed"};
+        NSString* markerName = @"bo1-iwi-preview.json";
+        if (showModelFixturePreview)
+        {
+            const bool rendered = success && self.sceneView.scene &&
+                !self.sceneView.hidden && self.sceneView.pointOfView &&
+                self.sceneView.scene.rootNode.childNodes.firstObject.geometry &&
+                self.sceneView.bounds.size.width > 100 &&
+                self.sceneView.bounds.size.height > 100;
+            report = rendered
+                ? @{@"status": @"pass", @"renderer": @"SceneKit",
+                    @"fixture_vertices": @8, @"fixture_triangles": @4,
+                    @"surface_count": @2,
+                    @"height": @(self.sceneView.bounds.size.height),
+                    @"width": @(self.sceneView.bounds.size.width)}
+                : @{@"status": @"fail", @"error": @"SceneKit model preview not visible"};
+            markerName = @"bo1-model-preview.json";
+        }
         NSData* json = [NSJSONSerialization dataWithJSONObject:report
             options:NSJSONWritingPrettyPrinted error:nullptr];
-        NSString* marker = [NSTemporaryDirectory() stringByAppendingPathComponent:@"bo1-iwi-preview.json"];
+        NSString* marker = [NSTemporaryDirectory() stringByAppendingPathComponent:markerName];
         if (![json writeToFile:marker atomically:YES])
             NSLog(@"Could not write IWI preview marker");
     });
@@ -937,7 +990,7 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success,
                 self.selectIwiButton.enabled = YES;
                 [self.activity stopAnimating];
                 [self refresh3DPreview];
-                if (showIwiFixturePreview && self.iwiFixtureURL)
+                if ((showIwiFixturePreview || showModelFixturePreview) && self.iwiFixtureURL)
                 {
                     if (success) self.stateLabel.text = @"Textura sintética DXT3: colores y transparencia.";
                     [self finishIwiFixture:success];
@@ -1016,6 +1069,7 @@ int main(int argc, char* argv[])
             runSelfTest = runSelfTest || std::strcmp(argv[index], "--self-test") == 0;
             showFixturePreview = showFixturePreview || std::strcmp(argv[index], "--fixture-preview") == 0;
             showIwiFixturePreview = showIwiFixturePreview || std::strcmp(argv[index], "--fixture-iwi-preview") == 0;
+            showModelFixturePreview = showModelFixturePreview || std::strcmp(argv[index], "--fixture-model-preview") == 0;
         }
         return UIApplicationMain(argc, argv, nil, NSStringFromClass(BO1AppDelegate.class));
     }
