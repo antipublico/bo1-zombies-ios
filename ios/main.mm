@@ -431,6 +431,18 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene*)scene];
     self.window.rootViewController = [[BO1ViewController alloc] init];
     [self.window makeKeyAndVisible];
+
+}
+@end
+
+@interface BO1AppDelegate : UIResponder <UIApplicationDelegate>
+@end
+
+@implementation BO1AppDelegate
+- (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)launchOptions
+{
+    // Run CI tests when the application has launched, without waiting for a
+    // UIWindowScene. Headless simulators do not always connect a scene.
     if (runSelfTest)
     {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -462,15 +474,6 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
             std::exit(passed && wroteMarker ? 0 : 1);
         });
     }
-}
-@end
-
-@interface BO1AppDelegate : UIResponder <UIApplicationDelegate>
-@end
-
-@implementation BO1AppDelegate
-- (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)launchOptions
-{
     return YES;
 }
 @end
