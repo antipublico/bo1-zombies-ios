@@ -275,3 +275,39 @@ El script `tools/ios_simulator_boot.py` intenta empezar a arrancar CoreSimulator
 **Bloqueo observado el 23/11/2026:** tras la ejecución exitosa `45150908043`, GitHub Actions rechazó las nuevas ejecuciones antes de asignar los runners (ambas plataformas, `runner_id=0`, cero pasos y sin logs; por ejemplo, `45154078512`); incluso la nueva ejecución rápida de Windows `45154723996` falló igual. **Esto no valida ni invalida el código nuevo de exploración**, que todavía necesita una compilación real y una prueba de simulador. Verificá [GitHub Billing & Licensing](https://github.com/settings/billing) (uso de Actions, presupuestos, pagos o avisos); si los límites están normales, revisá GitHub Status/Support, ya que los mismos síntomas pueden indicar un problema de asignación de runners. No habilites gastos ni compartas datos bancarios sin decidirlo vos.
 
 Cuando Actions vuelva a iniciar jobs, ejecutar el workflow completo para confirmar el modo de exploración, descargar la IPA sin firma, instalarla desde Windows con el método habitual y abrir `.ff` + `.iwi` → **Ver escena (9 plantas)** → **Explorar caminando**. Podés mantener instalada la última versión verificada (`45150908043`) mientras tanto.
+
+
+## iPhone SE 2020 + lightweight Windows scene packer
+
+The development app now uses a vertically scrolling layout with a shorter SceneKit
+preview on 667-point iPhones. **Explorar caminando** appears above the preview
+after a valid scene has been loaded; it is reachable without scrolling past
+the 3D canvas. The full-screen first-person camera and four held directional
+buttons remain available. This is only a SceneKit diagnostic, **not BO1 gameplay**.
+
+The Windows Actions artifact **bo1-scene-packer-windows-x64** contains a native
+bo1_scene_packer_win.exe (no Python installation required):
+
+1. Select one to six locally owned .ff files; each must have a decodable
+   first XModel with inline LOD0 vertices/triangles.
+2. Select a 2D IWI v13 DXT3/BC2 image extracted locally from your game.
+3. Export a .bo1scene and copy that file into Files on the iPhone.
+4. In the updated iOS app, choose **Abrir escena ligera .bo1scene**.
+   Model geometry, one selected texture, synthetic nine-instance floor,
+   and first-person touch exploration appear together.
+
+A .bo1scene is a **portable compact 16 MiB-max package**, not the original
+FastFile: one 32-byte versioned little-endian header, 2D BC2 top-mip data,
+then up to six bounded CPU-owned LOD0 meshes (names, five float32 values per
+vertex, and uint32 triangle indices). No original .ff, .iwd, .iwi or
+scripts are copied into it. It contains no BO1 map layout, animation, audio,
+physics, material assignment or executable game code. All model instances
+and placements are synthetic until real map placements can be decoded. The
+Windows exporter validates round-trip decode before saving; the iOS importer
+separately bounds and validates the full file.
+
+The iOS simulator smoke test imports a **synthetic** compact scene through
+the same UIDocumentPicker callback as the real app, checks the walking button
+and scroll container and uploads scene-pack-preview.json/png. Device screen
+size may differ from the simulator; the iPhone SE 2020 layout needs physical
+verification by the owner. Never commit game binaries or Apple credentials.
