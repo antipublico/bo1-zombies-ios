@@ -56,14 +56,34 @@ def main():
         simctl("boot", device_id)
         simctl("bootstatus", device_id, "-b", timeout=240)
         simctl("install", device_id, str(args.app.resolve()))
+        data_container = Path(simctl(
+            "get_app_container", device_id, bundle_id, "data"
+        ).stdout.strip())
+        marker = data_container / "tmp" / "bo1-native-self-test.txt"
+        marker.unlink(missing_ok=True)
         result = simctl(
             "launch", "--console", "--terminate-running-process",
             device_id, bundle_id, "--self-test", timeout=90, check=False,
         )
-        (args.output / "self-test.log").write_text(result.stdout)
+        # Xcode 26's simctl --console sometimes returns only 'bundle: PID'
+        # when the app exits quickly. Prefer the explicit sandbox marker.
+        status = ""
+        for _ in range(40):
+            if marker.is_file():
+                status = marker.read_text(encoding="utf-8")
+                if status:
+                    break
+            time.sleep(0.5)
+        (args.output / "self-test.log").write_text(
+            result.stdout + "\nSaved self-test marker: " + status + "\n"
+        )
         print(result.stdout, flush=True)
-        if result.returncode or "BO1_IOS_SELF_TEST_PASS" not in result.stdout:
-            raise RuntimeError("The iOS app did not pass its native component self-test")
+        print("Saved self-test marker:", status, flush=True)
+        if "BO1_IOS_SELF_TEST_PASS" not in status:
+            raise RuntimeError(
+                "The iOS app did not pass its native component self-test: "
+                + (status or f"no marker (simctl exit {result.returncode})")
+            )
 
         simctl("launch", device_id, bundle_id)
         time.sleep(3)
