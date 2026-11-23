@@ -155,6 +155,431 @@ int main()
     payload.push_back(0);
     Put32(payload, 0, payload.size() - 36);
     load(payload, InspectionResult::InvalidFormat);
+    // An XModel header is useful diagnostic evidence even before its
+    // surface/material child bodies are supported. Do not call it loaded.
+    Bytes modelPayload(36 + 16 + 8 + 252, 0);
+    Put32(modelPayload, 0, static_cast<uint32_t>(modelPayload.size() - 36));
+    Put32(modelPayload, 8, 252); // TEMP holds the 252-byte Win32 XModel.
+    Put32(modelPayload, 24, 4096); // Directory in stream block 4.
+    Put32(modelPayload, 36 + 8, 1); // One directory entry.
+    Put32(modelPayload, 36 + 12, UINT32_MAX);
+    Put32(modelPayload, 36 + 16, 5); // Asset type: XModel.
+    Put32(modelPayload, 36 + 20, UINT32_MAX); // Inline root.
+    constexpr size_t modelStart = 36 + 16 + 8;
+    modelPayload[modelStart + 4] = 8; // bones
+    modelPayload[modelStart + 5] = 2; // root bones
+    modelPayload[modelStart + 6] = 12; // surfaces
+    bo1::bytecode::Store<uint16_t>(modelPayload.data() + modelStart + 44, 12);
+    bo1::bytecode::Store<int16_t>(modelPayload.data() + modelStart + 216, 1);
+    Put32(modelPayload, modelStart + 32, UINT32_MAX); // Surface array.
+    Put32(modelPayload, modelStart + 36, UINT32_MAX); // Material pointers.
+    Put32(modelPayload, modelStart + 172, UINT32_MAX); // Collision surfaces.
+    Put32(modelPayload, modelStart + 176, 3);
+    // Load_XSurfaceArray reads 12 serialized 68-byte headers as one block.
+    modelPayload.insert(modelPayload.end(), 12 * XSurfaceDiskHeaderSize, 0);
+    modelPayload.insert(modelPayload.end(), 12 * 4, 0); // MaterialHandleArray(12).
+    Put32(modelPayload, 0, static_cast<uint32_t>(modelPayload.size() - 36));
+    load(modelPayload, InspectionResult::Ok);
+    Check(result.stop == AssetStop::UnsupportedModelBody && result.nextAsset == 0
+        && result.entries.empty() && result.pendingXModel.has_value()
+        && result.pendingXModelSkeleton.has_value()
+        && result.pendingXModelSkeleton->inlineArrayBytes == 0
+        && result.pendingXModelSkeleton->surfaceHeaders.size() == 12
+        && result.pendingXModelSkeleton->surfaceHeaderBytes == 816
+        && result.pendingXModelSkeleton->materialHandleTags.size() == 12
+        && result.pendingXModelSkeleton->emptyMaterialSlots == 12
+        && result.pendingXModelSkeleton->materialHandleBytes == 48
+        && result.pendingXModel->numBones == 8 && result.pendingXModel->numSurfaces == 12
+        && result.pendingXModel->numCollisionSurfaces == 3
+        && result.decodedAssetBytes == 252 + 816 + 48,
+        "XModel, surface headers and material handle tags stop before nested materials");
+    Check(result.pendingXModel && CalculateXModelInlineBytes(*result.pendingXModel).surfaceHeaders == 816,
+        "pending XModel metadata exposes bounded surface array estimate");
+
+    // The native loader must read XString followed by the six fixed skeletal
+    // arrays in exactly the original Load_XModel child order, without padding
+    // in the compressed stream. Block-4 alignment is tracked independently.
+    auto modelWithBones = Bytes(modelPayload.begin(),
+        modelPayload.begin() + modelStart + XModelDiskHeaderSize);
+    modelWithBones[modelStart + 4] = 3; // three bones, one root.
+    modelWithBones[modelStart + 5] = 1;
+    Put32(modelWithBones, modelStart, UINT32_MAX); // XString.
+    for (size_t field : {size_t(8), size_t(12), size_t(16), size_t(20), size_t(24), size_t(28)})
+        Put32(modelWithBones, modelStart + field, UINT32_MAX);
+    const char name[] = "model";
+    modelWithBones.insert(modelWithBones.end(), name, name + sizeof(name));
+    for (size_t i = 0; i < 6; ++i) modelWithBones.push_back(static_cast<uint8_t>(i + 1));
+    modelWithBones.push_back(0); modelWithBones.push_back(1); // parent bytes.
+    for (size_t i = 0; i < 16 + 32 + 3 + 96; ++i)
+        modelWithBones.push_back(static_cast<uint8_t>((i + 3) & 255));
+    modelWithBones.insert(modelWithBones.end(), 12 * XSurfaceDiskHeaderSize, 0);
+    modelWithBones.insert(modelWithBones.end(), 12 * 4, 0);
+    Put32(modelWithBones, 0, static_cast<uint32_t>(modelWithBones.size() - 36));
+    load(modelWithBones, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->name == "model"
+        && result.pendingXModelSkeleton->boneNameBytes.size() == 6
+        && result.pendingXModelSkeleton->boneNameBytes[0] == 1
+        && result.pendingXModelSkeleton->parentList.size() == 2
+        && result.pendingXModelSkeleton->parentList[1] == 1
+        && result.pendingXModelSkeleton->quaternions.size() == 16
+        && result.pendingXModelSkeleton->translations.size() == 32
+        && result.pendingXModelSkeleton->classifications.size() == 3
+        && result.pendingXModelSkeleton->baseMatrices.size() == 96
+        && result.pendingXModelSkeleton->inlineArrayBytes == 155
+        && result.pendingXModelSkeleton->unresolvedFields == 0
+        && result.pendingXModelSkeleton->surfaceHeaders.size() == 12
+        && result.decodedAssetBytes == 252 + 6 + 155 + 816 + 48,
+        "XModel skeleton preview reads ordered inline children without Win32 pointer casts");
+
+    auto referencedModel = modelPayload;
+    Put32(referencedModel, modelStart + 8, 0x80000029u); // Previously stored bone array.
+    load(referencedModel, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->unresolvedFields == 1u
+        && result.pendingXModelSkeleton->boneNameBytes.empty()
+        && result.decodedAssetBytes == 252 + 816 + 48,
+        "referenced bone array remains unresolved without consuming FILE data");
+
+    auto withGeometry = modelPayload;
+    constexpr size_t surfStart = modelStart + XModelDiskHeaderSize;
+    bo1::bytecode::Store<uint16_t>(withGeometry.data() + surfStart + 4, 123);
+    bo1::bytecode::Store<uint16_t>(withGeometry.data() + surfStart + 6, 45);
+    bo1::bytecode::Store<uint16_t>(withGeometry.data() + surfStart + 2, 2);
+    load(withGeometry, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->surfaceHeaders.size() == 12
+        && result.pendingXModelSkeleton->surfaceHeaders[0].vertCount == 123
+        && result.pendingXModelSkeleton->surfaceHeaders[0].triCount == 45
+        && result.pendingXModelSkeleton->surfaceHeaders[0].flags == 2
+        && result.pendingXModelSkeleton->declaredVertices == 123
+        && result.pendingXModelSkeleton->declaredTriangles == 45,
+        "XModel geometry preview decodes a serialized XSurface array");
+    // Contiguous XSurface headers are followed by per-surface child arrays.
+    // Preserve the original FILE ordering while applying 16-byte stream-block
+    // alignment to packed vertices and triangle indices.
+    auto withInlineGeometry = modelPayload;
+    bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + surfStart + 4, 3);
+    bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + surfStart + 6, 1);
+    Put32(withInlineGeometry, surfStart + 32, UINT32_MAX);
+    Put32(withInlineGeometry, surfStart + 12, UINT32_MAX);
+    const size_t firstVertex = withInlineGeometry.size() - 12 * 4;
+    withInlineGeometry.insert(withInlineGeometry.begin() + firstVertex, 3 * 32 + 3 * 2, 0);
+    bo1::bytecode::Store<float>(withInlineGeometry.data() + firstVertex, 1.5f);
+    bo1::bytecode::Store<float>(withInlineGeometry.data() + firstVertex + 4, -2.25f);
+    bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + firstVertex + 96, 0);
+    bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + firstVertex + 98, 1);
+    bo1::bytecode::Store<uint16_t>(withInlineGeometry.data() + firstVertex + 100, 2);
+    Put32(withInlineGeometry, 0, static_cast<uint32_t>(withInlineGeometry.size() - 36));
+    load(withInlineGeometry, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->surfaceBodies.size() == 12
+        && result.pendingXModelSkeleton->surfaceBodies[0].packedVertices.size() == 96
+        && result.pendingXModelSkeleton->surfaceBodies[0].triangleIndices.size() == 6
+        && result.pendingXModelSkeleton->surfaceBodies[0].inlineBodyBytes == 102
+        && result.pendingXModelSkeleton->decodedGeometryBytes == 102
+        && bo1::bytecode::Load<float>(result.pendingXModelSkeleton->surfaceBodies[0].packedVertices.data()) == 1.5f
+        && bo1::bytecode::Load<uint16_t>(
+            result.pendingXModelSkeleton->surfaceBodies[0].triangleIndices.data() + 4) == 2
+        && result.decodedAssetBytes == 252 + 816 + 102 + 48,
+        "XSurface inline vertices and triangle indices survive portable CPU reconstruction");
+    auto truncatedGeometry = withInlineGeometry;
+    truncatedGeometry.pop_back();
+    Put32(truncatedGeometry, 0, static_cast<uint32_t>(truncatedGeometry.size() - 36));
+    load(truncatedGeometry, InspectionResult::InvalidFormat);
+    Check(!result.pendingXModelSkeleton, "truncated XSurface geometry publishes no buffers");
+
+    auto withCollisionTree = modelPayload;
+    withCollisionTree[surfStart + 1] = 1; // one XRigidVertList
+    Put32(withCollisionTree, surfStart + 40, UINT32_MAX);
+    const size_t rigidBegin = withCollisionTree.size() - 12 * 4;
+    withCollisionTree.insert(withCollisionTree.begin() + rigidBegin, 12 + 40 + 16 + 2, 0);
+    Put32(withCollisionTree, rigidBegin + 8, UINT32_MAX);
+    Put32(withCollisionTree, rigidBegin + 12 + 24, 1); // nodeCount
+    Put32(withCollisionTree, rigidBegin + 12 + 28, 1); // node presence
+    Put32(withCollisionTree, rigidBegin + 12 + 32, 1); // leafCount
+    Put32(withCollisionTree, rigidBegin + 12 + 36, 1); // leaf presence
+    Put32(withCollisionTree, 0, static_cast<uint32_t>(withCollisionTree.size() - 36));
+    load(withCollisionTree, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->surfaceBodies[0].rigidLists.size() == 12
+        && result.pendingXModelSkeleton->surfaceBodies[0].inlineCollisionTrees.size() == 1
+        && result.pendingXModelSkeleton->surfaceBodies[0].inlineCollisionTrees[0].nodeCount == 1
+        && result.pendingXModelSkeleton->surfaceBodies[0].inlineCollisionTrees[0].nodes.size() == 16
+        && result.pendingXModelSkeleton->surfaceBodies[0].inlineCollisionTrees[0].leaves.size() == 2
+        && result.pendingXModelSkeleton->decodedGeometryBytes == 12 + 40 + 16 + 2,
+        "XSurface rigid list and inline collision tree with nodes and leaves");
+
+    auto malformedSurface = modelPayload;
+    bo1::bytecode::Store<int16_t>(malformedSurface.data() + surfStart + 16, -1);
+    load(malformedSurface, InspectionResult::InvalidFormat);
+    Check(!result.pendingXModel && !result.pendingXModelSkeleton,
+        "invalid XSurface header does not leak partial model data");
+
+    // The recursive Material loader has not run yet. Verify the original
+    // pointer-slot ordering, including '-1' inline, '-2' inserted and alias.
+    auto taggedMaterials = modelPayload;
+    constexpr size_t materialStart = surfStart + 12 * XSurfaceDiskHeaderSize;
+    Put32(taggedMaterials, materialStart, UINT32_MAX);
+    Put32(taggedMaterials, materialStart + 4, UINT32_MAX - 1);
+    Put32(taggedMaterials, materialStart + 8, 0x80000011u);
+    load(taggedMaterials, InspectionResult::Ok);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->materialHandleTags.size() == 12
+        && result.pendingXModelSkeleton->inlineMaterials == 2
+        && result.pendingXModelSkeleton->referencedMaterials == 1
+        && result.pendingXModelSkeleton->emptyMaterialSlots == 9
+        && result.pendingXModelSkeleton->materialHandleTags[0] == UINT32_MAX
+        && result.pendingXModelSkeleton->materialHandleTags[1] == UINT32_MAX - 1
+        && result.pendingXModelSkeleton->materialHandleTags[2] == 0x80000011u,
+        "XModel MaterialHandle array preserves Win32 tags without dereferencing them");
+    auto materialWithHeader = taggedMaterials;
+    constexpr size_t materialOffset = modelStart + XModelDiskHeaderSize
+        + 12 * XSurfaceDiskHeaderSize + 12 * 4;
+    materialWithHeader.resize(materialOffset + 192, 0);
+    Put32(materialWithHeader, materialOffset + 0, UINT32_MAX); // Inline MaterialInfo name.
+    Put32(materialWithHeader, materialOffset + 4, 0x1234ABCDu); // gameFlags.
+    materialWithHeader[materialOffset + 9] = 7; // sortKey.
+    materialWithHeader[materialOffset + 170] = 2; // textures.
+    materialWithHeader[materialOffset + 171] = 3; // constants.
+    materialWithHeader[materialOffset + 172] = 4; // state bits.
+    Put32(materialWithHeader, materialOffset + 176, 0x80000011u);
+    Put32(materialWithHeader, materialOffset + 180, UINT32_MAX);
+    Put32(materialWithHeader, materialOffset + 184, UINT32_MAX);
+    Put32(materialWithHeader, materialOffset + 188, UINT32_MAX);
+    const char materialName[] = "t5_foliage";
+    materialWithHeader.insert(materialWithHeader.end(), materialName,
+        materialName + sizeof(materialName));
+    const size_t textureOffset = materialWithHeader.size();
+    materialWithHeader.insert(materialWithHeader.end(), 2 * 16, 0);
+    Put32(materialWithHeader, textureOffset, 0xD0E0F00Du);
+    materialWithHeader[textureOffset + 6] = 7; // sampler.
+    materialWithHeader[textureOffset + 7] = 2; // semantic.
+    Put32(materialWithHeader, textureOffset + 12, UINT32_MAX); // inline image.
+    materialWithHeader[textureOffset + 16 + 7] = 11; // water semantic.
+    Put32(materialWithHeader, textureOffset + 16 + 12, 0x80000029u);
+    Put32(materialWithHeader, 0,
+        static_cast<uint32_t>(materialWithHeader.size() - 36));
+    Put32(materialWithHeader, 8, 252 + 192); // Nested TEMP Material header.
+    AssetLoadLimits deep;
+    deep.previewFirstMaterialHeader = true;
+    load(materialWithHeader, InspectionResult::Ok, deep);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial.has_value()
+        && result.pendingXModelSkeleton->firstInlineMaterial->slot == 0
+        && result.pendingXModelSkeleton->firstInlineMaterial->name == "t5_foliage"
+        && result.pendingXModelSkeleton->firstInlineMaterial->gameFlags == 0x1234ABCDu
+        && result.pendingXModelSkeleton->firstInlineMaterial->sortKey == 7
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureCount == 2
+        && result.pendingXModelSkeleton->firstInlineMaterial->constantCount == 3
+        && result.pendingXModelSkeleton->firstInlineMaterial->stateBitsCount == 4
+        && result.pendingXModelSkeleton->firstInlineMaterial->techniqueSetTag == 0x80000011u
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureTableTag == UINT32_MAX
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders.size() == 2
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaderBytes == 32
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureChildrenPending
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[0].nameHash == 0xD0E0F00Du
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[0].samplerState == 7
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[0].semantic == 2
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[0].imageOrWaterTag == UINT32_MAX
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[1].semantic == 11
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders[1].imageOrWaterTag == 0x80000029u
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32,
+        "opt-in Material header preview retains name and serialized pointer tags");
+    auto truncatedMaterial = materialWithHeader;
+    truncatedMaterial.resize(materialOffset + 191);
+    Put32(truncatedMaterial, 0,
+        static_cast<uint32_t>(truncatedMaterial.size() - 36));
+    load(truncatedMaterial, InspectionResult::InvalidFormat, deep);
+    Check(!result.pendingXModelSkeleton,
+        "truncated nested Material header publishes no partial model");
+    auto materialNoName = materialWithHeader;
+    Put32(materialNoName, materialOffset, 0);
+    materialNoName.resize(materialOffset + 192 + 32);
+    Put32(materialNoName, 0,
+        static_cast<uint32_t>(materialNoName.size() - 36));
+    load(materialNoName, InspectionResult::Ok, deep);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->name.empty()
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + 32,
+        "nested Material with null name preserves consecutive texture headers");
+
+    auto truncatedTextures = materialWithHeader;
+    truncatedTextures.pop_back();
+    Put32(truncatedTextures, 0,
+        static_cast<uint32_t>(truncatedTextures.size() - 36));
+    load(truncatedTextures, InspectionResult::InvalidFormat, deep);
+    Check(!result.pendingXModelSkeleton,
+        "truncated nested MaterialTextureDef array publishes no preview");
+    auto inlineTechnique = materialWithHeader;
+    Put32(inlineTechnique, materialOffset + 176, UINT32_MAX);
+    inlineTechnique.resize(textureOffset);
+    Put32(inlineTechnique, 0,
+        static_cast<uint32_t>(inlineTechnique.size() - 36));
+    load(inlineTechnique, InspectionResult::Ok, deep);
+    Check(result.pendingXModelSkeleton && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->nestedTechniqueSetPending
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureHeaders.empty()
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName),
+        "inline TechniqueSet blocks reading subsequent Material texture headers");
+
+    // The first texture points at an embedded GfxImage. A 52-byte header is
+    // serialized in TEMP; the image name is an XString in persistent block 4.
+    auto withImage = materialWithHeader;
+    const size_t imageOffset = withImage.size();
+    withImage.insert(withImage.end(), 52, 0);
+    Put32(withImage, imageOffset, UINT32_MAX); // Texture load-def, still unread.
+    withImage[imageOffset + 4] = 2; // mapType
+    withImage[imageOffset + 5] = 2; // semantic
+    withImage[imageOffset + 6] = 1; // category
+    bo1::bytecode::Store<uint16_t>(withImage.data() + imageOffset + 20, 256);
+    bo1::bytecode::Store<uint16_t>(withImage.data() + imageOffset + 22, 128);
+    bo1::bytecode::Store<uint16_t>(withImage.data() + imageOffset + 24, 1);
+    withImage[imageOffset + 26] = 5;
+    withImage[imageOffset + 27] = 1;
+    Put32(withImage, imageOffset + 28, 8192);
+    Put32(withImage, imageOffset + 32, UINT32_MAX);
+    Put32(withImage, imageOffset + 36, 4096);
+    Put32(withImage, imageOffset + 44, UINT32_MAX);
+    Put32(withImage, imageOffset + 48, 0xCAFE1234u);
+    const char imageName[] = "foliage_diffuse";
+    withImage.insert(withImage.end(), imageName, imageName + sizeof(imageName));
+    const size_t loadDefOffset = withImage.size();
+    withImage.insert(withImage.end(), 12, 0);
+    withImage[loadDefOffset] = 5; // mip levels.
+    withImage[loadDefOffset + 1] = 3; // flags.
+    bo1::bytecode::Store<int32_t>(withImage.data() + loadDefOffset + 4, 21);
+    bo1::bytecode::Store<int32_t>(withImage.data() + loadDefOffset + 8, 16384);
+    Put32(withImage, 8, 252 + 192 + 52 + 12);
+    Put32(withImage, 0, static_cast<uint32_t>(withImage.size() - 36));
+    AssetLoadLimits imageLimits = deep;
+    imageLimits.previewFirstImageHeader = true;
+    load(withImage, InspectionResult::Ok, imageLimits);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->name == imageName
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->textureSlot == 0
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->width == 256
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->height == 128
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->depth == 1
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->levelCount == 5
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->textureTag == UINT32_MAX
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->pixelsTag == UINT32_MAX
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->baseSize == 8192
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadedSize == 4096
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->hash == 0xCAFE1234u
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->inlineLoadDefHeader
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefLevels == 5
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefFlags == 3
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefFormat == 21
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefResourceSize == 16384
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32
+            + 52 + sizeof(imageName) + 12,
+        "opt-in 52-byte image header and XString preserve original pixel tags");
+    auto imageTruncated = withImage;
+    imageTruncated.resize(imageOffset + 51);
+    Put32(imageTruncated, 0, static_cast<uint32_t>(imageTruncated.size() - 36));
+    load(imageTruncated, InspectionResult::InvalidFormat, imageLimits);
+    Check(!result.pendingXModelSkeleton,
+        "truncated nested GfxImage header publishes no partial model");
+    auto imageNoName = withImage;
+    Put32(imageNoName, imageOffset + 44, 0);
+    imageNoName.resize(imageOffset + 52 + 12);
+    const size_t noNameDef = imageOffset + 52;
+    imageNoName[noNameDef] = 1;
+    bo1::bytecode::Store<int32_t>(imageNoName.data() + noNameDef + 8, 0);
+    Put32(imageNoName, 0, static_cast<uint32_t>(imageNoName.size() - 36));
+    load(imageNoName, InspectionResult::Ok, imageLimits);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->name.empty()
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32 + 52 + 12,
+        "inline GfxImage with null name does not require a string payload");
+    auto truncatedLoadDef = withImage;
+    truncatedLoadDef.resize(loadDefOffset + 11);
+    Put32(truncatedLoadDef, 0,
+        static_cast<uint32_t>(truncatedLoadDef.size() - 36));
+    load(truncatedLoadDef, InspectionResult::InvalidFormat, imageLimits);
+    Check(!result.pendingXModelSkeleton,
+        "truncated GfxImageLoadDef header never publishes preview");
+    auto invalidLoadDef = withImage;
+    bo1::bytecode::Store<int32_t>(invalidLoadDef.data() + loadDefOffset + 8, -1);
+    load(invalidLoadDef, InspectionResult::InvalidFormat, imageLimits);
+    Check(!result.pendingXModelSkeleton,
+        "negative image resource size is rejected");
+    auto referencedLoadDef = withImage;
+    Put32(referencedLoadDef, imageOffset, 0x80000039u);
+    referencedLoadDef.resize(loadDefOffset);
+    Put32(referencedLoadDef, 0,
+        static_cast<uint32_t>(referencedLoadDef.size() - 36));
+    load(referencedLoadDef, InspectionResult::Ok, imageLimits);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
+        && !result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->inlineLoadDefHeader
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefPending
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32
+            + 52 + sizeof(imageName),
+        "referenced GfxImageLoadDef does not consume inline bytes");
+    // Real v473 texture '~-gt5_foliage_desert_brush02_c' uses -2, not
+    // -1. This inserts one 4-byte alias slot in block 4 and then consumes
+    // exactly the same 12 FILE bytes as an inline -1 GfxImageLoadDef.
+    auto insertedLoadDef = withImage;
+    Put32(insertedLoadDef, imageOffset, UINT32_MAX - 1);
+    load(insertedLoadDef, InspectionResult::Ok, imageLimits);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->inlineLoadDefHeader
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefInsertedAlias
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefLevels == 5
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefFormat == 21
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefResourceSize == 16384
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->textureTag == UINT32_MAX - 1
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32
+            + 52 + sizeof(imageName) + 12,
+        "-2 GfxTextureLoad inserts a pointer slot without consuming FILE bytes");
+    auto insertedTruncated = insertedLoadDef;
+    insertedTruncated.resize(loadDefOffset + 11);
+    Put32(insertedTruncated, 0,
+        static_cast<uint32_t>(insertedTruncated.size() - 36));
+    load(insertedTruncated, InspectionResult::InvalidFormat, imageLimits);
+    Check(!result.pendingXModelSkeleton,
+        "truncated -2 GfxImageLoadDef never publishes a partial preview");
+    auto insertedInvalidSize = insertedLoadDef;
+    bo1::bytecode::Store<int32_t>(insertedInvalidSize.data() + loadDefOffset + 8, -1);
+    load(insertedInvalidSize, InspectionResult::InvalidFormat, imageLimits);
+    Check(!result.pendingXModelSkeleton,
+        "-2 GfxImageLoadDef rejects negative texture resource sizes");
+
+    auto waterFirst = withImage;
+    waterFirst[textureOffset + 7] = 11;
+    Put32(waterFirst, 0, static_cast<uint32_t>(waterFirst.size() - 36));
+    load(waterFirst, InspectionResult::Ok, imageLimits);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && !result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
+        && result.pendingXModelSkeleton->firstInlineMaterial->inlineWaterBeforeImage
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32,
+        "inline water before image prevents unsafe image header inspection");
+
+    auto truncatedHandles = modelPayload;
+    truncatedHandles.pop_back();
+    Put32(truncatedHandles, 0, static_cast<uint32_t>(truncatedHandles.size() - 36));
+    load(truncatedHandles, InspectionResult::InvalidFormat);
+    Check(!result.pendingXModelSkeleton, "truncated material handle table never publishes preview");
+
+    auto invalidModel = modelPayload;
+    invalidModel[modelStart + 5] = 9; // More root bones than total bones.
+    load(invalidModel, InspectionResult::InvalidFormat);
+    Check(!result.pendingXModel, "invalid XModel header does not publish preview");
+
+    auto damagedModel = Pack(modelPayload);
+    damagedModel.back() ^= 1;
+    write(damagedModel);
+    Check(LoadAssetPrefix(path.string().c_str(), result, error) == InspectionResult::CorruptStream
+        && !result.pendingXModel && result.entries.empty(),
+        "late checksum failure discards pending XModel preview");
+
     std::printf("%u native asset checks, %u failures\n", checks, failures);
     return failures != 0;
 }

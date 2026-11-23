@@ -2,12 +2,24 @@ name: Portable components and iOS app
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - 'port/**'
 
 permissions:
   contents: read
 
+# Keep only the newest validation when several commits land on a port branch.
+concurrency:
+  group: bo1-port-verified-materials-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   portable-and-ios:
+    # macOS minutes are expensive for private repositories. Run this full
+    # device/simulator pipeline on demand or when an explicit commit opts in.
+    # Ordinary pushes still run the fast Windows build and portable tests.
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ios ci]') }}
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -19,6 +31,12 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           cmake --build build/host --parallel 3
           ctest --test-dir build/host --output-on-failure
+      - name: Check screenshot verifier before simulator boot
+        run: xcrun swift tools/check_iwi_screenshot.swift --self-test
+      # Booting a fresh CoreSimulator costs several minutes. Start it now and
+      # overlap simulator startup with the two independent iOS builds.
+      - name: Preboot iPhone simulator while compiling
+        run: python3 tools/ios_simulator_boot.py --output build/simulator-preboot/udid.txt
       - name: Build iOS ARM64 app and libraries
         run: |
           cmake -S . -B build/ios -G Xcode \
@@ -57,7 +75,8 @@ jobs:
         run: |
           python3 tools/ios_simulator_smoke.py \
             build/simulator/Release-iphonesimulator/BO1Zombies.app \
-            --output build/simulator-results
+            --output build/simulator-results \
+            --prebooted-udid build/simulator-preboot/udid.txt
       - name: Upload iOS libraries
         uses: actions/upload-artifact@v4
         with:
@@ -77,3 +96,27 @@ jobs:
           name: bo1-ios-simulator-results
           path: build/simulator-results/
           if-no-files-found: warn
+
+  windows-inspector:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure portable Windows tools
+        run: cmake -S . -B build/windows -DBO1_PORTABLE_TOOLS=ON -DBUILD_TESTING=ON
+      - name: Build portable Windows inspector and tests
+        run: cmake --build build/windows --config Release --parallel 4
+      - name: Run Windows unit and integration tests
+        run: ctest --test-dir build/windows -C Release --output-on-failure
+      - name: Upload native Windows scene packer
+        uses: actions/upload-artifact@v4
+        with:
+          name: bo1-scene-packer-windows-x64
+          path: build/windows/Release/bo1_scene_packer_win.exe
+          if-no-files-found: error
+      - name: Upload Windows inspector executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: bo1-fastfile-inspector-windows-x64
+          path: build/windows/Release/bo1_fastfile_inspect.exe
+          if-no-files-found: error

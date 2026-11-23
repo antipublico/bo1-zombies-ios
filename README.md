@@ -23,6 +23,16 @@ ctest --test-dir build/portable -C Release --output-on-failure
 ```
 
 Run `bo1_fastfile_inspect <path-to-zone.ff>` from the build output directory.
+GitHub Actions also builds a Windows x64 inspector artifact
+(`bo1-fastfile-inspector-windows-x64`) without bundling copyrighted game data.
+Extract the downloaded artifact ZIP, then on Windows, from PowerShell run:
+
+```powershell
+.\bo1_fastfile_inspect.exe --load-assets "C:\path\to\your\zone.ff" *> bo1-report.txt
+```
+
+Share the small `bo1-report.txt` for diagnosis instead of uploading game archives.
+The tool reads the selected file and does not modify or upload it.
 It reads the package header and checks the complete compressed stream using the
 engine's bundled zlib. Authenticated packages follow the existing loader's
 unsupported path. The output reports declared sizes and actual decompressed
@@ -73,10 +83,85 @@ Native types still to implement include materials,
 images, models, animation, collision and sound.
 
 The next Kino model has 12 surfaces, four LODs and three collision surfaces.
-Adding XModel requires a TEMP stream stack for nested Material/TechniqueSet
-headers, aliases to nested asset-pointer slots, 16-byte surface alignment,
+The portable loader now decodes the 252-byte Win32 XModel root header and its
+fixed skeletal child arrays (bone-name ID bytes, parents, quaternions,
+translations, classifications and base matrices) as **diagnostic metadata**,
+then reads the contiguous 68-byte XSurface header array (if present) and its
+nested inline vertex/index/rigid-list/collision-tree payloads into CPU-only
+buffers. It then reads the original MaterialHandle pointer-slot table and
+classifies inline/shared/empty Win32 tags. The Windows CLI also opts into a
+strictly bounded 192-byte preview of the first inline Material header and
+its name. If its technique set is not nested inline, the inspector also
+reads the fixed 16-byte MaterialTextureDef records and reports each texture
+semantic and serialized GfxImage/water pointer. If the first recursive
+child is an inline image (rather than water), the Windows inspector also
+decodes that image's 52-byte header and name, including dimensions, mip count,
+pixel sizes and pointer tags. For inline -1 or -2 GfxTextureLoad pointers, the inspector
+also decodes the 12-byte GfxImageLoadDef header (format, flags, resource length).
+A -2 pointer reserves one 4-byte block-4 alias slot without consuming extra
+compressed FILE bytes, following DB_InsertPointer in the original loader.
+Neither path reads or allocates pixel payload bytes. Inline water payloads,
+texture constants, state bits and other Material children remain unresolved.
+No texture is uploaded to a GPU.
+
+The first real streaming image `~-gt5_foliage_desert_brush02_c` has
+512x512 dimensions with GfxTextureLoad=-2, texture resource length 0 and
+Direct3D format 861165636 (= FourCC `DXT3`, BC2). A zero-length inline
+resource is not a corrupted format; the actual pixel source remains unknown.
+The game's original `Image_LoadFromFile` looks for the image at
+`images/~-gt5_foliage_desert_brush02_c.iwi` (potentially inside a
+`.iwd` archive loaded by the game's virtual file system). The portable
+`IwiHeader` decoder reads the 48-byte `IWi` version-13 header, dimensions,
+flags and 8 picmip file-size fields. IWI file format 12 means DXT3/BC2.
+After extracting your own IWI into a local folder, inspect or convert its
+highest-resolution **2D BC2** mip into an uncompressed preview:
+
+```powershell
+.\\bo1_fastfile_inspect.exe --inspect-iwi "C:\\path\\to\\image.iwi"
+.\\bo1_fastfile_inspect.exe --decode-iwi "C:\\path\\to\\image.iwi" "preview.tga"
+```
+
+The iOS development app now also accepts the user's .iwi image via the
+**Abrir textura .iwi** picker. For valid 2D IWi version-13/DXT3 files,
+it decodes the highest-resolution mip using the shared BC2 decoder, creates
+a premultiplied RGBA8 CoreGraphics image with original transparency, and
+previews that image in UIKit. The picker reads only the 48-byte header and
+the required top-mip blocks, via scoped/coordinated local file access.
+A synthetic .iwi file exercises this same file-to-UIKit bridge in the
+ARM64 native self-test. Other IWI formats and 3D/cubemap textures are
+rejected without falling back to incorrect decoding. This is a texture
+viewer, **not** Metal rendering or playable Zombies.
+
+The IWI decoder never changes the original game file. Cubemaps/volumes, other
+image codecs and loaded game engine materials are not supported by this
+diagnostic pathway.
+
+The standalone `bo1::texture::DecodeBC2RGBA` CPU decoder can turn a
+properly sized BC2 block buffer into RGBA8 with bounded output, clipped
+edge blocks, and four-bit alpha. For 512x512 BC2 this would require
+262,144 compressed bytes and yield 1,048,576 RGBA8 bytes. This decoding
+is covered by independent CTest fixtures and an ARM64 iOS native self-test.
+It cannot reconstruct missing streamed pixels and does not render a scene. Shader execution and physics integration are pending.
+`AssetPrefix::pendingXModel` retains the counts, tags and four LOD descriptors
+without casting serialized pointers to ARM64 pointers. The iOS inspector
+reports these values and an estimate of fixed-size inline child arrays.
+No model is published as a reconstructed native asset at that stopping point.
+Skeletal bytes are retained without resolving script-string IDs or arbitrary
+external alias offsets. XSurface header counts and flags are retained, but
+inline vertex/index data is retained as original serialized bytes, including
+collision nodes/leaves, without any renderer or GPU handles. Referenced
+(shared) child arrays remain unresolved, and materials, shaders and gameplay
+physics are still not loaded by this preview. The compressed stream and checksum are still validated before
+the preview is returned.
+
+Preparatory native helpers also decode the 68-byte Win32 XSurface header
+and calculate the consecutive inline blend, tension, vertex, rigid-list and
+triangle-index byte counts. They do not allocate these arrays or translate D3D
+handles. The nested TEMP stream cursor enforces a 64-frame stack and bounded
+alignment, but actual nested XModel/Material operations have **not** yet
+been wired to that stack. Completing XModel still requires child pointer
+resolution, correct stream-block alignment, 16-byte packed-vertex alignment,
 material/image decoding and a representation for bone script-string IDs.
-The current root-only TEMP check must not be reused unchanged for nested assets.
 Geometry uploads and physics creation remain separate from CPU reconstruction.
 
 Configure the desktop engine with `-DBO1_WITH_STEAM=OFF` to link the static
@@ -155,3 +240,132 @@ logging, platform services and device-feature assumptions still need adaptation
 and testing. [HarkinianPad's implementation notes](https://github.com/chrissotraidis/harkinianpad/blob/main/docs/ios-feasibility-and-implementation-plan.md)
 provide an additional reference for mobile audio, input, sandbox paths and Apple
 build integration.
+
+## Primer visor 3D de geometría auténtica (desarrollo, iOS)
+
+El lector CPU reconstruye el primer XModel LOD0 soportado de un archivo `.ff` propio del usuario: posiciones float, triángulos indexados y coordenadas de textura T5 empaquetadas como mitades IEEE-754 (orden VU). Rechaza skinning, referencias de geometría faltantes, índices fuera de rango y valores no finitos. La aplicación usa **SceneKit** para mostrar la geometría del juego y aplica la **imagen `.iwi` que seleccionó el usuario** como textura sobre todas las superficies soportadas (no está implementada la vinculación automática de materiales).
+
+En el iPhone, copiá el `.ff` y su `.iwi` a Archivos. Abrí primero `Seleccionar archivo .ff` y después `Abrir textura .iwi` (también se pueden cargar en orden inverso). Si el LOD0 del primer modelo está completo, aparecerá la **vista 3D girable con el dedo** y un botón para alternar con la textura plana. Si no está disponible, la app muestra el motivo en los diagnósticos y mantiene el visor 2D. Es una primera vista de geometría, **no una partida**, y el material no corresponde necesariamente a todas las superficies ni al resto del mapa.
+
+CI valida el decodificador portátil con fixtures sintéticos y el pipeline iOS con `--fixture-model-preview` (captura `model-preview.png`). Esta captura **no usa assets originales del juego**; probar la geometría real sigue requiriendo que el usuario seleccione su propio `.ff` en un iPhone físico. La app se sigue distribuyendo como IPA de desarrollo sin firmar.
+
+## Escena de diagnóstico con varias plantas (2026-11-23)
+
+La aplicación puede **repetir el XModel LOD0 auténtico** ya extraído de un `.ff` sobre una superficie neutra para mostrar **nueve instancias 3D** girables; esas posiciones y el suelo se generan artificialmente para la vista de desarrollo: **no corresponden a un mapa original de Black Ops**. La opción **«Ver escena (9 plantas)»** aparece después de seleccionar un `.ff` con malla soportada y una textura `.iwi`. Tocá **«Ver modelo individual»** para regresar a la vista original y **«Ver textura plana»** para mostrar la imagen.
+
+Opcionalmente, **«Añadir otro modelo .ff»** permite incorporar hasta **seis fuentes** (una malla extraída por cada archivo `.ff` seleccionado; todavía no se puede leer el segundo o tercer XModel de un mismo `.ff`). Las nueve instancias usan esas fuentes de forma alternada; por ahora todas comparten la textura IWI elegida manualmente. Se pueden cargar archivos `.ff` adicionales de manera consecutiva, pero no se guardan permanentemente en la app y ninguna fuente de juego se sube a GitHub. El selector principal **«Seleccionar archivo .ff»** inicia una escena nueva.
+
+CI incluye la prueba independiente y acotada `scene_layout`, un fixture visual de dos geometrías sintéticas y nueve instancias con suelo, además de una captura `scene-preview.png` de SceneKit. Para evaluar el resultado real sigue siendo necesaria una prueba en el dispositivo con archivos propios. No es un juego, nivel, mapa ni motor Zombies completo.
+
+## Exploración en primera persona (iOS, fase experimental)
+
+El escenario de diagnóstico con nueve instancias ahora incluye **«Explorar caminando»**. Desde la escena abierta, tocá el botón para entrar a una vista **a pantalla completa**: mantené presionadas las cuatro flechas para caminar y deslizá un dedo fuera de la cruceta para mirar alrededor. «Volver al visor» cierra la cámara de exploración. La velocidad y los límites de desplazamiento se ajustan a las dimensiones de las mallas importadas; el suelo y la distribución son inventados. **No hay físicas, colisiones, zombis, disparos ni movimiento del motor original de BO1.**
+
+La prueba de CI añade `--fixture-explore-preview`, que crea una escena artificial de dos mallas fuente, presenta la interfaz a pantalla completa, comprueba el nodo de cámara y los cuatro controles y guarda `explore-preview.png/json` (no realiza pruebas automatizadas de gestos reales). La app ARM64 sigue distribuyéndose sin firmar para instalación local con una cuenta de Apple del usuario.
+
+Para reducir esperas de CI, se inicia el simulador macOS en paralelo con la compilación iOS; el script `tools/ios_simulator_smoke.py` acepta opcionalmente `--prebooted-udid` y conserva el arranque independiente cuando ese parámetro no está.
+
+
+### Compilación y pruebas de iOS sin agotar GitHub Actions
+
+Las ejecuciones de macOS requieren iniciar un simulador de iPhone y pueden consumir muchos minutos de computación en repositorios privados. Para evitar repetirlas en cada commit, **el trabajo completo de iOS ahora es opt-in**: en GitHub, abrí **Actions → Portable components and iOS app → Run workflow**, elegí `port/xmodel-temp-stream-stack` y ejecutá. Los commits cuya descripción incluya `[ios ci]` también lo activan. Las pruebas de Windows se solicitan automáticamente con cada push.
+
+El script `tools/ios_simulator_boot.py` intenta empezar a arrancar CoreSimulator durante la compilación de Xcode; el simulador de `tools/ios_simulator_smoke.py` utiliza la ID de ese dispositivo. Si ejecutás el script manualmente sin `--prebooted-udid`, mantiene su comportamiento anterior.
+
+**Bloqueo observado el 23/11/2026:** tras la ejecución exitosa `45150908043`, GitHub Actions rechazó las nuevas ejecuciones antes de asignar los runners (ambas plataformas, `runner_id=0`, cero pasos y sin logs; por ejemplo, `45154078512`); incluso la nueva ejecución rápida de Windows `45154723996` falló igual. **Esto no valida ni invalida el código nuevo de exploración**, que todavía necesita una compilación real y una prueba de simulador. Verificá [GitHub Billing & Licensing](https://github.com/settings/billing) (uso de Actions, presupuestos, pagos o avisos); si los límites están normales, revisá GitHub Status/Support, ya que los mismos síntomas pueden indicar un problema de asignación de runners. No habilites gastos ni compartas datos bancarios sin decidirlo vos.
+
+Cuando Actions vuelva a iniciar jobs, ejecutar el workflow completo para confirmar el modo de exploración, descargar la IPA sin firma, instalarla desde Windows con el método habitual y abrir `.ff` + `.iwi` → **Ver escena (9 plantas)** → **Explorar caminando**. Podés mantener instalada la última versión verificada (`45150908043`) mientras tanto.
+
+
+## iPhone SE 2020 + lightweight Windows scene packer
+
+The development app now uses a vertically scrolling layout with a shorter SceneKit
+preview on 667-point iPhones. **Explorar caminando** appears above the preview
+after a valid scene has been loaded; it is reachable without scrolling past
+the 3D canvas. The full-screen first-person camera and four held directional
+buttons remain available. This is only a SceneKit diagnostic, **not BO1 gameplay**.
+
+The Windows Actions artifact **bo1-scene-packer-windows-x64** contains a native
+bo1_scene_packer_win.exe (no Python installation required):
+
+1. Select one to six locally owned .ff files; each must have a decodable
+   first XModel with inline LOD0 vertices/triangles.
+2. Select a 2D IWI v13 DXT3/BC2 image extracted locally from your game.
+3. Export a .bo1scene and copy that file into Files on the iPhone.
+4. In the updated iOS app, choose **Abrir escena ligera .bo1scene**.
+   Model geometry, one selected texture, synthetic nine-instance floor,
+   and first-person touch exploration appear together.
+
+A .bo1scene is a **portable compact 16 MiB-max package**, not the original
+FastFile: one 32-byte versioned little-endian header, 2D BC2 top-mip data,
+then up to six bounded CPU-owned LOD0 meshes (names, five float32 values per
+vertex, and uint32 triangle indices). No original .ff, .iwd, .iwi or
+scripts are copied into it. It contains no BO1 map layout, animation, audio,
+physics, material assignment or executable game code. All model instances
+and placements are synthetic until real map placements can be decoded. The
+Windows exporter validates round-trip decode before saving; the iOS importer
+separately bounds and validates the full file.
+
+The iOS simulator smoke test imports a **synthetic** compact scene through
+the same UIDocumentPicker callback as the real app, checks the walking button
+and scroll container and uploads scene-pack-preview.json/png. Device screen
+size may differ from the simulator; the iPhone SE 2020 layout needs physical
+verification by the owner. Never commit game binaries or Apple credentials.
+
+
+### Windows automatic folder mode (experimental)
+
+Instead of selecting every asset, the Windows GUI now has a prominent
+**AUTOMATICO: ANALIZAR CARPETA DEL JUEGO** action. Select the game installation
+directory once, then choose where to save the resulting .bo1scene package.
+The program scans up to 40,000 files, prioritizes smaller zombie_*.ff zones
+when present, attempts the current first-XModel LOD0 extraction (at most 80
+FastFiles), finds original .iwi textures both loose and inside .iwd ZIP
+archives, and unpacks compatible stored/Deflate texture data locally without
+a separate extractor. All 18 Windows CTests pass, including stored/Deflate
+synthetic IWD extraction, CRC verification, pack roundtrip and malformed data.
+
+**Important fidelity limitation:** this is currently an automatic
+*asset-preview-pack exporter*, NOT a complete original Zombies room/map
+extractor. The original world position, terrain, structural surfaces,
+static-model placements, per-surface material bindings and GfxWorld content
+are still unavailable in the current FastFile loader. The export therefore
+contains at most one successfully decoded XModel and one BC2 texture, with
+a clearly labeled tentative material association. The iOS diagnostic still
+uses synthetic placements; it does NOT claim to recreate a true map area.
+Some installations may not contain any compatible XModel/BC2 pair, in which
+case the program prints the reason and does not fabricate geometry.
+
+A genuinely original map subsection requires extending the FF parser to
+GfxWorld/ComWorld and original placement/material references and validating
+those fields against assets available only in the user's local installation.
+No original game binaries are committed to this public repository.
+
+
+### Strict zombie/material matching and multi-texture scene test
+
+The Windows exporter now exposes a **BUSCAR ZOMBI + TEXTURA EXACTA
+(sin animación)** action. It only accepts an XModel whose decoded name
+resembles a zombie and whose first inline material explicitly contains a
+GfxImage name. That name must match an IWI filename exactly (normalized
+case, images/ prefix and .iwi suffix), **never by substring or model name**.
+Unmatched assets are rejected: grass_piece1.iwi can no longer be a
+zombie texture fallback. The alternative general scanner uses the same
+strict policy. Both modes can export up to six independently decoded
+models and up to six texture files where linked metadata is available.
+
+The versioned BO1SCN02 binary includes additional BC2 textures and a
+per-mesh texture index, and the iOS SceneKit renderer uses the assigned
+material for each mesh source; BO1SCN01 packs stay readable. CI now
+tests a synthetic two-model/two-texture file import, first-person button,
+and rejects fuzzy matches and invalid texture indices.
+
+**This does not yet make an animated zombie.** Zombies use skinned
+XModels/rigs and XAnim. The present LOD0 extractor excludes skinned
+surfaces, the current prefix reader stops at the first undecoded XModel,
+and only the *first* material/image reference can be inspected.
+XAnim directory entries may be counted but their payload, skeleton
+mapping and keyframes are not read or exported. The GUI reports those
+limits instead of producing fake animation. True 3D animated zombies
+require extending the loader to handle the complete XModel skeleton,
+surface skinning and XAnimParts data.

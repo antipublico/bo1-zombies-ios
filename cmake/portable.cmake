@@ -38,6 +38,20 @@ if (BO1_BUILD_FASTFILE_INSPECTOR)
     target_link_libraries(bo1_fastfile_inspect PRIVATE bo1_fastfile_inspection)
 endif()
 
+# Native file-picker GUI on Windows. It uses only the same portable parsing
+# primitives as the iOS preview; no Windows BO1 game runtime is bundled.
+if (WIN32 AND BO1_BUILD_FASTFILE_INSPECTOR)
+    add_executable(bo1_scene_packer_win WIN32 tools/bo1_scene_packer_win.cpp)
+    target_include_directories(bo1_scene_packer_win PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_scene_packer_win PRIVATE cxx_std_17)
+    target_link_libraries(bo1_scene_packer_win PRIVATE bo1_fastfile_inspection bo1_inspect_zlib
+        comdlg32 user32 shell32 ole32)
+    # Windows MSVC defaults to the system codepage; the GUI source is UTF-8.
+    if(MSVC)
+        target_compile_options(bo1_scene_packer_win PRIVATE /utf-8)
+    endif()
+endif()
+
 include(CTest)
 if (BUILD_TESTING)
     add_executable(bo1_bytecode_tests tests/bytecode_tests.cpp)
@@ -67,6 +81,62 @@ if (BUILD_TESTING)
     add_executable(bo1_techset_assets_tests tests/techset_assets_tests.cpp tests/techset_fixture.cpp)
     target_link_libraries(bo1_techset_assets_tests PRIVATE bo1_fastfile_inspection)
     add_test(NAME techset_assets COMMAND bo1_techset_assets_tests)
+
+    add_executable(bo1_temp_stream_tests tests/temp_stream_tests.cpp)
+    target_include_directories(bo1_temp_stream_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_temp_stream_tests PRIVATE cxx_std_17)
+    add_test(NAME temp_stream COMMAND bo1_temp_stream_tests)
+
+    add_executable(bo1_xmodel_header_tests tests/xmodel_header_tests.cpp)
+    target_include_directories(bo1_xmodel_header_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_xmodel_header_tests PRIVATE cxx_std_17)
+    add_test(NAME xmodel_header COMMAND bo1_xmodel_header_tests)
+
+    add_executable(bo1_xsurface_header_tests tests/xsurface_header_tests.cpp)
+    target_include_directories(bo1_xsurface_header_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_xsurface_header_tests PRIVATE cxx_std_17)
+    add_test(NAME xsurface_header COMMAND bo1_xsurface_header_tests)
+
+    add_executable(bo1_bc2_texture_tests tests/bc2_texture_tests.cpp)
+    target_include_directories(bo1_bc2_texture_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_bc2_texture_tests PRIVATE cxx_std_17)
+    add_test(NAME bc2_texture COMMAND bo1_bc2_texture_tests)
+
+    add_executable(bo1_iwi_image_tests tests/iwi_image_tests.cpp)
+    target_include_directories(bo1_iwi_image_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_iwi_image_tests PRIVATE cxx_std_17)
+    add_test(NAME iwi_image COMMAND bo1_iwi_image_tests)
+
+    add_executable(bo1_model_mesh_tests tests/model_mesh_tests.cpp)
+    target_include_directories(bo1_model_mesh_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_model_mesh_tests PRIVATE cxx_std_17)
+    add_test(NAME model_mesh COMMAND bo1_model_mesh_tests)
+
+    add_executable(bo1_iwd_zip_tests tests/iwd_zip_tests.cpp)
+    target_include_directories(bo1_iwd_zip_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_iwd_zip_tests PRIVATE cxx_std_17)
+    target_link_libraries(bo1_iwd_zip_tests PRIVATE bo1_inspect_zlib)
+    add_test(NAME iwd_zip COMMAND bo1_iwd_zip_tests)
+
+    add_executable(bo1_texture_match_tests tests/texture_match_tests.cpp)
+    target_include_directories(bo1_texture_match_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_texture_match_tests PRIVATE cxx_std_17)
+    add_test(NAME texture_match COMMAND bo1_texture_match_tests)
+
+    add_executable(bo1_scene_pack_tests tests/scene_pack_tests.cpp)
+    target_include_directories(bo1_scene_pack_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_scene_pack_tests PRIVATE cxx_std_17)
+    add_test(NAME scene_pack COMMAND bo1_scene_pack_tests)
+
+    add_executable(bo1_scene_layout_tests tests/scene_layout_tests.cpp)
+    target_include_directories(bo1_scene_layout_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_scene_layout_tests PRIVATE cxx_std_17)
+    add_test(NAME scene_layout COMMAND bo1_scene_layout_tests)
+
+    add_executable(bo1_explore_motion_tests tests/explore_motion_tests.cpp)
+    target_include_directories(bo1_explore_motion_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_explore_motion_tests PRIVATE cxx_std_17)
+    add_test(NAME explore_motion COMMAND bo1_explore_motion_tests)
 
     if (BO1_BUILD_FASTFILE_INSPECTOR)
         find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)

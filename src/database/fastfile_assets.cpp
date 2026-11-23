@@ -1,5 +1,6 @@
 #include "fastfile_assets.h"
 #include "fastfile_reader.h"
+#include "db_temp_stream_cursor.h"
 #include <platform/bo1_bytecode_io.h>
 #include <algorithm>
 #include <climits>
@@ -36,7 +37,8 @@ public:
     AssetBuilder(Reader& reader, Inspection& inspection, const MetadataState& metadata,
         AssetPrefix& output, const AssetLoadLimits& limits)
         : reader(reader), inspection(inspection), metadata(metadata), output(output), limits(limits),
-          block4(metadata.block4Cursor), declared(XFileHeaderSize + uint64_t(inspection.file.size))
+          block4(metadata.block4Cursor), temp(inspection.file.blockSize[0]),
+          declared(XFileHeaderSize + uint64_t(inspection.file.size))
     {
         output.storage = std::make_shared<AssetStorage>();
     }
@@ -47,11 +49,35 @@ public:
             return false;
         for (size_t index = 0; index < inspection.assets.size(); ++index)
         {
+            if (!temp.ResetRoot())
+                return Fail("Unbalanced temporary stream stack at asset boundary.");
             const AssetEntry& disk = inspection.assets[index];
             NativeAsset native{};
             native.type = disk.type;
             if (disk.serializedTag)
             {
+                if (disk.type == 5 && disk.serializedTag >= UINT32_MAX - 1)
+                {
+                    // XModel is the first unsupported root in Kino. Reading
+                    // its bounded TEMP header yields useful diagnostics but
+                    // cannot advance past its nested surfaces/materials yet.
+                    // Do not publish this as an engine-owned or usable asset.
+                    unsigned char modelDisk[XModelDiskHeaderSize];
+                    XModelHeader model{};
+                    if (!Header(modelDisk, sizeof(modelDisk)))
+                        return false;
+                    if (!DecodeXModelHeader(modelDisk, sizeof(modelDisk), model))
+                        return Fail("XModel header contains invalid bone, LOD or collision counts.");
+                    XModelSkeletonPreview skeleton{};
+                    if (!ModelSkeleton(model, skeleton)
+                        || !ModelSurfaceHeaders(model, skeleton)
+                        || !ModelMaterialHandles(model, skeleton))
+                        return false;
+                    output.pendingXModel = model;
+                    output.pendingXModelSkeleton = std::move(skeleton);
+                    output.stop = AssetStop::UnsupportedModelBody;
+                    break;
+                }
                 if (disk.type != 36 && disk.type != 37 && disk.type != 23 && disk.type != 7)
                 {
                     output.stop = AssetStop::UnsupportedType;
@@ -151,8 +177,9 @@ private:
 
     bool Header(unsigned char* bytes, size_t size)
     {
-        // PopStreamPos restores block 0 to the position preceding this root.
-        if (size > inspection.file.blockSize[0])
+        // TEMP positions are restored after nested headers and reset between
+        // roots. Nested model/material loaders will use Push/Pop for children.
+        if (!temp.Advance(size))
             return Fail("Asset header exceeds temporary stream block 0.");
         return Read(bytes, size);
     }
@@ -240,6 +267,371 @@ private:
         }
         return reader.Fail(InspectionResult::UnsupportedReference,
             "Asset string reference does not identify a previously decoded string start.");
+    }
+
+    // Decode only the ordered, fixed-size skeletal children of the XModel.
+    // Stream position 4 is persistent; references are not dereferenced until
+    // the per-type alias resolver exists. The following XSurface body is
+    // deliberately NOT consumed, and no model object is published.
+    bool ModelSkeleton(const XModelHeader& model, XModelSkeletonPreview& preview)
+    {
+        const char* name = nullptr;
+        if (!String(model.nameTag, name)) return false;
+        if (name)
+        {
+            const size_t length = std::strlen(name);
+            if (!Charge(length + 1)) return false;
+            preview.name.assign(name, length);
+        }
+        const size_t bones = model.numBones;
+        const size_t children = bones - model.numRootBones;
+        auto array = [&](uint32_t tag, size_t bytes, uint64_t alignment,
+            std::vector<uint8_t>& dest, uint32_t unresolvedFlag) -> bool
+        {
+            if (tag != UINT32_MAX)
+            {
+                if (tag) preview.unresolvedFields |= unresolvedFlag;
+                return true;
+            }
+            if (!AdvanceBlock(bytes, alignment) || !Charge(bytes)) return false;
+            dest.resize(bytes);
+            if (bytes && !Read(dest.data(), bytes)) return false;
+            preview.inlineArrayBytes += bytes;
+            return true;
+        };
+        return array(model.boneNamesTag, bones * 2, 2, preview.boneNameBytes, 1u)
+            && array(model.parentListTag, children, 1, preview.parentList, 2u)
+            && array(model.quaternionsTag, children * 8, 2, preview.quaternions, 4u)
+            && array(model.translationsTag, children * 16, 4, preview.translations, 8u)
+            && array(model.classificationsTag, bones, 1, preview.classifications, 16u)
+            && array(model.baseMatricesTag, bones * 32, 4, preview.baseMatrices, 32u);
+    }
+
+    // Load_XSurfaceArray first reads every 68-byte surface header from block
+    // 4, then follows nested vertex/triangle/collision payloads. Parse only
+    // that first contiguous array here. Never advance past its child bodies.
+    bool ModelSurfaceHeaders(const XModelHeader& model, XModelSkeletonPreview& preview)
+    {
+        if (!model.surfacesTag) return true;
+        const size_t bytes = size_t(model.numSurfaces) * XSurfaceDiskHeaderSize;
+        if (!AdvanceBlock(bytes, 4)
+            || !Charge(bytes + size_t(model.numSurfaces) * sizeof(XSurfaceHeader)))
+            return false;
+        std::vector<uint8_t> raw(bytes);
+        if (bytes && !Read(raw.data(), bytes)) return false;
+        preview.surfaceHeaders.reserve(model.numSurfaces);
+        for (size_t i = 0; i < model.numSurfaces; ++i)
+        {
+            XSurfaceHeader header;
+            if (!DecodeXSurfaceHeader(raw.data() + i * XSurfaceDiskHeaderSize,
+                    XSurfaceDiskHeaderSize, header))
+                return Fail("XSurface header has invalid skin vertex group counts.");
+            preview.declaredVertices += header.vertCount;
+            preview.declaredTriangles += header.triCount;
+            preview.surfaceHeaders.push_back(header);
+        }
+        preview.surfaceHeaderBytes = bytes;
+        if (!Charge(size_t(model.numSurfaces) * sizeof(XSurfaceBodyPreview)))
+            return false;
+        preview.surfaceBodies.reserve(model.numSurfaces);
+        for (const auto& surface : preview.surfaceHeaders)
+        {
+            XSurfaceBodyPreview body;
+            if (!SurfaceBody(surface, body)) return false;
+            preview.decodedGeometryBytes += body.inlineBodyBytes;
+            preview.surfaceBodies.push_back(std::move(body));
+        }
+        return true;
+    }
+
+    // Every XSurface's children follow its header-array block in the exact
+    // Load_XSurface order. Referenced/shared tags are left unresolved; they
+    // consume no FILE bytes. Only serial -1 means an inline geometry array.
+    bool SurfaceArray(uint32_t tag, size_t bytes, uint64_t alignment,
+        std::vector<uint8_t>& outputBytes, XSurfaceBodyPreview& preview,
+        uint32_t unresolvedFlag)
+    {
+        if (tag != UINT32_MAX)
+        {
+            if (tag) preview.unresolvedFields |= unresolvedFlag;
+            return true;
+        }
+        if (!AdvanceBlock(bytes, alignment) || !Charge(bytes)) return false;
+        outputBytes.resize(bytes);
+        if (bytes && !Read(outputBytes.data(), bytes)) return false;
+        preview.inlineBodyBytes += bytes;
+        return true;
+    }
+
+    bool InlineCollisionTree(XSurfaceBodyPreview& preview)
+    {
+        unsigned char disk[40];
+        if (!AdvanceBlock(sizeof(disk), 4) || !Charge(sizeof(disk)
+            + sizeof(XSurfaceCollisionPreview)) || !Read(disk, sizeof(disk)))
+            return false;
+        preview.inlineBodyBytes += sizeof(disk);
+        XSurfaceCollisionPreview tree{};
+        tree.nodeCount = bytecode::Load<uint32_t>(disk + 24);
+        const uint32_t nodeTag = bytecode::Load<uint32_t>(disk + 28);
+        tree.leafCount = bytecode::Load<uint32_t>(disk + 32);
+        const uint32_t leafTag = bytecode::Load<uint32_t>(disk + 36);
+        // Load_XSurfaceCollisionTree treats any nonzero tag as inline,
+        // unlike the sentinel-specific XSurface array children.
+        const auto max = uint64_t(limits.maxNativeBytes);
+        if ((nodeTag && uint64_t(tree.nodeCount) * 16 > max)
+            || (leafTag && uint64_t(tree.leafCount) * 2 > max))
+            return reader.Fail(InspectionResult::LimitExceeded,
+                "XSurface collision tree exceeds geometry memory limit.");
+        if (!SurfaceArray(nodeTag ? UINT32_MAX : 0, size_t(tree.nodeCount) * 16,
+                16, tree.nodes, preview, 0)
+            || !SurfaceArray(leafTag ? UINT32_MAX : 0, size_t(tree.leafCount) * 2,
+                2, tree.leaves, preview, 0))
+            return false;
+        preview.inlineCollisionTrees.push_back(std::move(tree));
+        return true;
+    }
+
+    bool SurfaceBody(const XSurfaceHeader& surface, XSurfaceBodyPreview& preview)
+    {
+        const auto sizes = CalculateXSurfaceInlineBytes(surface);
+        if (!SurfaceArray(surface.vertsBlendTag, size_t(sizes.blendIndices), 2,
+                preview.blendIndices, preview, 1)
+            || !SurfaceArray(surface.tensionDataTag, size_t(sizes.tensionData), 4,
+                preview.tensionData, preview, 2)
+            || !SurfaceArray(surface.packedVerticesTag, size_t(sizes.packedVertices), 16,
+                preview.packedVertices, preview, 4)
+            || !SurfaceArray(surface.rigidVertListTag, size_t(sizes.rigidLists), 4,
+                preview.rigidLists, preview, 8))
+            return false;
+        // XRigidVertListArray reads all 12-byte list records first and
+        // subsequently loads each referenced collision-tree body.
+        for (size_t i = 0; i + 12 <= preview.rigidLists.size(); i += 12)
+        {
+            const uint32_t tag = bytecode::Load<uint32_t>(preview.rigidLists.data() + i + 8);
+            if (tag == UINT32_MAX)
+            {
+                if (!InlineCollisionTree(preview)) return false;
+            }
+            else if (tag)
+                preview.unresolvedFields |= 32;
+        }
+        return SurfaceArray(surface.triIndicesTag, size_t(sizes.triangleIndices),
+            16, preview.triangleIndices, preview, 16);
+    }
+
+    // The original Load_MaterialHandleArray consumes a contiguous array of
+    // 32-bit pointer tags first; only then does it recurse into each Material.
+    // Stop at the array boundary. Inline Material(-1/-2) and aliases need a
+    // nested loader and asset registry, and are deliberately NOT resolved.
+    bool ModelMaterialHandles(const XModelHeader& model, XModelSkeletonPreview& preview)
+    {
+        if (!model.materialsTag) return true;
+        const size_t count = model.numSurfaces;
+        const size_t bytes = count * sizeof(uint32_t);
+        if (!AdvanceBlock(bytes, 4)
+            || !Charge(bytes + count * sizeof(uint32_t)))
+            return false;
+        std::vector<unsigned char> disk(bytes);
+        if (bytes && !Read(disk.data(), bytes)) return false;
+        preview.materialHandleTags.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            const uint32_t tag = bytecode::Load<uint32_t>(disk.data() + i * 4);
+            preview.materialHandleTags.push_back(tag);
+            if (!tag) ++preview.emptyMaterialSlots;
+            else if (tag == UINT32_MAX || tag == UINT32_MAX - 1)
+                ++preview.inlineMaterials;
+            else ++preview.referencedMaterials;
+        }
+        preview.materialHandleBytes = bytes;
+        if (limits.previewFirstMaterialHeader && preview.inlineMaterials)
+            return FirstInlineMaterial(preview);
+        return true;
+    }
+
+    bool FirstInlineMaterial(XModelSkeletonPreview& preview)
+    {
+        size_t first = preview.materialHandleTags.size();
+        for (size_t i = 0; i < preview.materialHandleTags.size(); ++i)
+        {
+            const uint32_t tag = preview.materialHandleTags[i];
+            if (tag == UINT32_MAX || tag == UINT32_MAX - 1)
+            {
+                first = i;
+                break;
+            }
+        }
+        if (first == preview.materialHandleTags.size()) return true;
+        // Load_MaterialHandle enters TEMP (block 0) for an inline Material.
+        // Its 192-byte header follows the parent XModel in that block.
+        // The name is read from block 4, before any nested technique/texture.
+        constexpr size_t MaterialDiskSize = 192;
+        unsigned char disk[MaterialDiskSize]{};
+        if (!temp.Advance(MaterialDiskSize, 4))
+            return Fail("First inline Material exceeds temporary block 0.");
+        if (!Read(disk, sizeof(disk))) return false;
+        XMaterialHeaderPreview material{};
+        material.slot = first;
+        material.nameTag = bytecode::Load<uint32_t>(disk);
+        material.gameFlags = bytecode::Load<uint32_t>(disk + 4);
+        material.sortKey = disk[9];
+        material.textureAtlasRows = disk[10];
+        material.textureAtlasColumns = disk[11];
+        material.textureCount = disk[170];
+        material.constantCount = disk[171];
+        material.stateBitsCount = disk[172];
+        material.stateFlags = disk[173];
+        material.cameraRegion = disk[174];
+        material.maxStreamedMips = disk[175];
+        material.techniqueSetTag = bytecode::Load<uint32_t>(disk + 176);
+        material.textureTableTag = bytecode::Load<uint32_t>(disk + 180);
+        material.constantTableTag = bytecode::Load<uint32_t>(disk + 184);
+        material.stateBitsTableTag = bytecode::Load<uint32_t>(disk + 188);
+        const char* name = nullptr;
+        if (!String(material.nameTag, name)) return false;
+        if (name)
+        {
+            if (!Charge(std::strlen(name) + 1)) return false;
+            material.name.assign(name);
+        }
+        if (!Charge(sizeof(XMaterialHeaderPreview))) return false;
+        // A recursive inline MaterialTechniqueSet is serialized before the
+        // texture table, so parsing beyond this point would misalign FILE.
+        if (material.techniqueSetTag == UINT32_MAX
+            || material.techniqueSetTag == UINT32_MAX - 1)
+        {
+            material.nestedTechniqueSetPending = true;
+        }
+        else if (!MaterialTextureHeaders(material))
+            return false;
+        preview.firstInlineMaterial = std::move(material);
+        return true;
+    }
+
+    bool MaterialTextureHeaders(XMaterialHeaderPreview& material)
+    {
+        if (!material.textureTableTag) return true;
+        if (material.textureTableTag != UINT32_MAX)
+        {
+            material.textureTableReferenced = true;
+            return true;
+        }
+        // Load_MaterialTextureDefArray first reads N contiguous 16-byte
+        // records, then loops over GfxImagePtr/water_t children. Stop before
+        // the latter: they may recursively load textures and image payloads.
+        const size_t count = material.textureCount;
+        const size_t bytes = count * 16;
+        if (!AdvanceBlock(bytes, 4)
+            || !Charge(bytes + count * sizeof(XMaterialTexturePreview)))
+            return false;
+        std::vector<unsigned char> disk(bytes);
+        if (bytes && !Read(disk.data(), bytes)) return false;
+        material.textureHeaders.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            const unsigned char* entry = disk.data() + i * 16;
+            XMaterialTexturePreview texture{};
+            texture.nameHash = bytecode::Load<uint32_t>(entry);
+            texture.nameStart = entry[4];
+            texture.nameEnd = entry[5];
+            texture.samplerState = entry[6];
+            texture.semantic = entry[7];
+            texture.mature = entry[8];
+            texture.imageOrWaterTag = bytecode::Load<uint32_t>(entry + 12);
+            if (texture.imageOrWaterTag)
+                material.textureChildrenPending = true;
+            material.textureHeaders.push_back(texture);
+        }
+        material.textureHeaderBytes = bytes;
+        // Load_MaterialTextureDefArray processes all nested image/water
+        // children after the header table. The first -1/-2 child is safe to
+        // probe if it is an image. A preceding inline water_t would occupy
+        // FILE/TEMP bytes; stop instead of guessing its size or placement.
+        if (limits.previewFirstImageHeader)
+        {
+            for (size_t i = 0; i < material.textureHeaders.size(); ++i)
+            {
+                const auto& texture = material.textureHeaders[i];
+                const uint32_t tag = texture.imageOrWaterTag;
+                if (tag != UINT32_MAX && tag != UINT32_MAX - 1)
+                    continue;
+                if (texture.semantic == 11)
+                {
+                    material.inlineWaterBeforeImage = true;
+                    return true;
+                }
+                return FirstInlineImage(i, tag, material);
+            }
+        }
+        return true;
+    }
+
+    bool FirstInlineImage(size_t index, uint32_t ptrTag,
+        XMaterialHeaderPreview& material)
+    {
+        // GfxImagePtr enters TEMP and invokes Load_GfxImage(1): a 52-byte
+        // Win32 header followed by an XString in persistent block 4.
+        // -2 reserves an inserted alias slot in block 4 before that name.
+        if (ptrTag == UINT32_MAX - 1 && !AdvanceBlock(4, 4))
+            return false;
+        unsigned char disk[52]{};
+        if (!temp.Advance(sizeof(disk), 4))
+            return Fail("First inline GfxImage exceeds temporary block 0.");
+        if (!Read(disk, sizeof(disk))) return false;
+        XImageHeaderPreview image{};
+        image.textureSlot = index;
+        image.textureTag = bytecode::Load<uint32_t>(disk);
+        image.mapType = disk[4];
+        image.semantic = disk[5];
+        image.category = disk[6];
+        image.delayLoadPixels = disk[7] != 0;
+        image.width = bytecode::Load<uint16_t>(disk + 20);
+        image.height = bytecode::Load<uint16_t>(disk + 22);
+        image.depth = bytecode::Load<uint16_t>(disk + 24);
+        image.levelCount = disk[26];
+        image.streaming = disk[27];
+        image.baseSize = bytecode::Load<uint32_t>(disk + 28);
+        image.pixelsTag = bytecode::Load<uint32_t>(disk + 32);
+        image.loadedSize = bytecode::Load<uint32_t>(disk + 36);
+        image.nameTag = bytecode::Load<uint32_t>(disk + 44);
+        image.hash = bytecode::Load<uint32_t>(disk + 48);
+        const char* name = nullptr;
+        if (!String(image.nameTag, name)) return false;
+        if (name)
+        {
+            if (!Charge(std::strlen(name) + 1)) return false;
+            image.name.assign(name);
+        }
+        if (image.textureTag == UINT32_MAX
+            || image.textureTag == UINT32_MAX - 1)
+        {
+            // db_load.cpp::Load_GfxTextureLoad: -2 invokes DB_InsertPointer()
+            // after entering block 0, before Load_GfxImageLoadDef(1). That
+            // reserves 4 aligned bytes in persistent block 4, but does not
+            // consume any compressed FILE bytes.
+            if (image.textureTag == UINT32_MAX - 1)
+            {
+                if (!AdvanceBlock(4, 4)) return false;
+                image.loadDefInsertedAlias = true;
+            }
+            unsigned char loadDef[12]{};
+            if (!temp.Advance(sizeof(loadDef), 4))
+                return Fail("GfxImageLoadDef exceeds temporary block 0.");
+            if (!Read(loadDef, sizeof(loadDef))) return false;
+            image.loadDefLevels = loadDef[0];
+            image.loadDefFlags = loadDef[1];
+            image.loadDefFormat = bytecode::Load<int32_t>(loadDef + 4);
+            image.loadDefResourceSize = bytecode::Load<int32_t>(loadDef + 8);
+            if (image.loadDefResourceSize < 0)
+                return Fail("GfxImageLoadDef has negative texture payload size.");
+            image.inlineLoadDefHeader = true;
+            image.loadDefPending = image.loadDefResourceSize != 0;
+        }
+        else if (image.textureTag)
+            image.loadDefPending = true;
+        if (!Charge(sizeof(XImageHeaderPreview))) return false;
+        material.firstInlineImage = std::move(image);
+        return true;
     }
 
     bool Raw(AssetNode& node)
@@ -514,6 +906,7 @@ private:
     AssetPrefix& output;
     const AssetLoadLimits& limits;
     uint64_t block4;
+    TempStreamCursor temp;
     uint64_t declared;
     uint64_t allocated = 0;
     std::vector<ResolvedString> strings;
