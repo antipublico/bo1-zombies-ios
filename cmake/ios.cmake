@@ -4,13 +4,13 @@ endif()
 
 enable_language(OBJCXX)
 
-add_executable(bo1_ios MACOSX_BUNDLE ios/main.mm tests/native_asset_fixture.cpp tests/techset_fixture.cpp)
+add_executable(bo1_ios MACOSX_BUNDLE ios/main.mm ios/bo1_explore_view.mm tests/native_asset_fixture.cpp tests/techset_fixture.cpp)
 target_compile_features(bo1_ios PRIVATE cxx_std_17)
 target_compile_options(bo1_ios PRIVATE -fobjc-arc)
 target_link_libraries(bo1_ios PRIVATE
     bo1_fastfile_inspection bo1_bytecode bo1_narrow32 bo1_steam_offline
     "-framework UIKit" "-framework Foundation" "-framework UniformTypeIdentifiers"
-    "-framework CoreGraphics" "-framework SceneKit"
+    "-framework CoreGraphics" "-framework SceneKit" "-framework QuartzCore"
 )
 set_target_properties(bo1_ios PROPERTIES
     OUTPUT_NAME BO1Zombies
