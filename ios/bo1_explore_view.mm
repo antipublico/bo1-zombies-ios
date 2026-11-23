@@ -1,5 +1,6 @@
 #import "bo1_explore_view.h"
 #import <QuartzCore/QuartzCore.h>
+#include <platform/bo1_explore_motion.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -177,9 +178,12 @@
 {
     CGPoint delta = [gesture translationInView:self.explorerView];
     [gesture setTranslation:CGPointZero inView:self.explorerView];
-    _yaw -= float(delta.x) * 0.004f;
-    _pitch -= float(delta.y) * 0.003f;
-    _pitch = std::max(-1.2f, std::min(1.2f, _pitch));
+    bo1::explore::CameraState state{};
+    state.yaw = _yaw;
+    state.pitch = _pitch;
+    bo1::explore::Turn(state, float(delta.x), float(delta.y));
+    _yaw = state.yaw;
+    _pitch = state.pitch;
     self.explorerCamera.eulerAngles = SCNVector3Make(_pitch, _yaw, 0);
 }
 
@@ -190,17 +194,21 @@
     _lastFrame = link.timestamp;
     const float forward = int(_moving[0]) - int(_moving[1]);
     const float side = int(_moving[3]) - int(_moving[2]);
-    const float magnitude = std::sqrt(forward * forward + side * side);
-    if (magnitude <= 0 || dt <= 0) return;
-    const float distance = float(dt) * std::max(0.5f,
-        float(self.worldSpan) * 1.6f) / magnitude;
     SCNVector3 position = self.explorerCamera.position;
-    position.x += (-std::sin(_yaw) * forward + std::cos(_yaw) * side) * distance;
-    position.z += (-std::cos(_yaw) * forward - std::sin(_yaw) * side) * distance;
-    const float bound = float(self.worldSpan) * 4.0f;
-    position.x = std::max(-bound, std::min(bound, position.x));
-    position.z = std::max(-bound, std::min(bound, position.z));
-    self.explorerCamera.position = position;
+    bo1::explore::CameraState state{};
+    state.x = position.x;
+    state.y = position.y;
+    state.z = position.z;
+    state.yaw = _yaw;
+    bo1::explore::Step(state, forward, side, float(dt), float(self.worldSpan));
+    self.explorerCamera.position = SCNVector3Make(state.x, state.y, state.z);
+}
+
+- (void)viewDidDisappear:(BOOL)animated
+{
+    [super viewDidDisappear:animated];
+    if (self.isBeingDismissed)
+        [self.explorerCamera removeFromParentNode];
 }
 
 - (void)closeExplorer:(id)sender

@@ -16,6 +16,10 @@ concurrency:
 
 jobs:
   portable-and-ios:
+    # macOS minutes are expensive for private repositories. Run this full
+    # device/simulator pipeline on demand or when an explicit commit opts in.
+    # Ordinary pushes still run the fast Windows build and portable tests.
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ios ci]') }}
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
