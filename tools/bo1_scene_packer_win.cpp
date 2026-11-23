@@ -4,6 +4,7 @@
 #include <commdlg.h>
 #include <shlobj.h>
 #include <platform/bo1_iwd_zip.h>
+#include <platform/bo1_texture_match.h>
 #include <algorithm>
 #include <cctype>
 #include <system_error>
@@ -25,7 +26,7 @@
 // decoded LOD0 CPU vertices/triangles and one BC2 top mip, not the source files.
 namespace {
 constexpr UINT Finished = WM_APP + 1;
-HWND autoButton=nullptr;
+HWND autoButton=nullptr, zombieButton=nullptr;
 HWND windowHandle=nullptr, statusLabel=nullptr, modelsLabel=nullptr;
 HWND addModelButton=nullptr, imageButton=nullptr, saveButton=nullptr, clearButton=nullptr;
 std::vector<std::wstring> files;
@@ -75,6 +76,7 @@ void UpdateLabels() {
     EnableWindow(saveButton,!busy&&!files.empty()&&!imagePath.empty());
     EnableWindow(clearButton,!busy);
     if (autoButton) EnableWindow(autoButton,!busy);
+    if (zombieButton) EnableWindow(zombieButton,!busy);
 }
 bool ReadImage(const std::wstring& path, bo1::scene_pack::Package& pack, std::string& error) {
     std::ifstream stream(std::filesystem::path(path),std::ios::binary|std::ios::ate);
@@ -227,7 +229,7 @@ bool ScanFolder(const std::filesystem::path& folder,
 }
 
 std::wstring AutomaticExport(const std::wstring& folder,
-                             const std::wstring& destination) {
+                             const std::wstring& destination, bool zombieOnly) {
     ScanResults found;
     std::string error;
     if(!ScanFolder(folder,found,error))return L"Carpeta: "+Wide(error);
@@ -239,6 +241,9 @@ std::wstring AutomaticExport(const std::wstring& folder,
     std::vector<Selected> models;
     std::size_t attempted=0;
     std::size_t estimatedMeshBytes=0;
+    std::size_t possibleZombieModels=0, skinnedZombieModels=0;
+    std::size_t missingInlineImage=0;
+    std::size_t xanimAssetEntries=0;
     for(const auto& file:found.fastfiles) {
         if(++attempted>80 || models.size()>=bo1::scene_pack::MaxModels)break;
         bo1::fastfile::AssetPrefix prefix;
@@ -248,8 +253,21 @@ std::wstring AutomaticExport(const std::wstring& folder,
         const std::string path=Utf8(file.wstring());
         if(bo1::fastfile::LoadAssetPrefix(path.c_str(),prefix,error,limits)
             !=bo1::fastfile::InspectionResult::Ok)continue;
+
+        for(const auto& entry : prefix.inspection.assets)
+            xanimAssetEntries += entry.type==4;
+        const auto* preview=prefix.pendingXModelSkeleton ?
+            &*prefix.pendingXModelSkeleton : nullptr;
+        if(zombieOnly) {
+            if(!preview || !bo1::texture_match::ZombieModel(preview->name))
+                continue;
+            ++possibleZombieModels;
+        }
         bo1::model::Mesh mesh;
-        if(!bo1::model::ExtractLOD0(prefix,mesh,error))continue;
+        if(!bo1::model::ExtractLOD0(prefix,mesh,error)) {
+            if(zombieOnly)++skinnedZombieModels;
+            continue;
+        }
         if(mesh.vertices.size()>bo1::scene_pack::MaxVerticesPerModel ||
            mesh.indices.size()>bo1::scene_pack::MaxIndicesPerModel)continue;
         const auto amount=16+mesh.name.size()+mesh.vertices.size()*20+
@@ -266,14 +284,29 @@ std::wstring AutomaticExport(const std::wstring& folder,
                 prefix.pendingXModelSkeleton->firstInlineMaterial->
                 firstInlineImage->name);
         }
+
+        if(selected.wanted.empty()) {
+            ++missingInlineImage;
+            continue; // Never invent an association for an unlinked material
+        }
         selected.mesh=std::move(mesh);
         estimatedMeshBytes+=amount;
         models.push_back(std::move(selected));
     }
+
     if(models.empty()) {
-        return L"Encontré "+std::to_wstring(found.fastfiles.size())+
-            L" archivos FF, pero los primeros "+std::to_wstring(attempted)+
-            L" no expusieron geometría LOD0 compatible. No inventé modelos.";
+        std::wstring info=L"No hay modelos LOD0 con vínculo imagen/material comprobable.\n";
+        info+=L"FF examinados: "+std::to_wstring(attempted)+L". ";
+        if(zombieOnly)info+=L"XModel zombie identificados: "+
+            std::to_wstring(possibleZombieModels)+L". No decodificables: "+
+            std::to_wstring(skinnedZombieModels)+L".\n";
+        info+=L"Modelos sin primer GfxImage inline: "+
+            std::to_wstring(missingInlineImage)+L".\n";
+        info+=L"XAnim listados (no decodificados): "+
+            std::to_wstring(xanimAssetEntries)+L".\n";
+        info+=L"Los zombies skinned requieren lectura del esqueleto/animaciones; ";
+        info+=L"este parser aún no permite extraerlos con fidelidad.";
+        return info;
     }
     struct Candidate {
         std::string name, key;
@@ -317,42 +350,17 @@ std::wstring AutomaticExport(const std::wstring& folder,
     bo1::scene_pack::Package pack;
     std::map<std::string,std::uint32_t> textureIds;
     std::vector<std::string> chosenTextures;
-    unsigned nameMatches=0, fallbackMatches=0;
+    unsigned exactMatches=0, unmatched=0;
     std::size_t totalTextureBytes=0;
-    auto score=[&](const Selected& mesh,const Candidate& image)->int{
-        const std::string desired=bo1::iwd::Lower(mesh.wanted);
-        const std::string name=bo1::iwd::Lower(mesh.mesh.name);
-        if(!desired.empty()) {
-            const auto slash=desired.find_last_of('/');
-            const std::string leaf=slash==std::string::npos?desired:desired.substr(slash+1);
-            if(image.name==desired+".iwi" || image.name=="images/"+desired+".iwi"
-               || image.name==desired || image.name=="images/"+desired)
-                return 100;
-            if(!leaf.empty() && image.name.find(leaf)!=std::string::npos)
-                return 95;
-        }
-        if(!name.empty()&&image.name.find(name)!=std::string::npos)return 65;
-        return 0;
-    };
     for(const auto& selected:models) {
-        std::vector<std::size_t> ranked(candidates.size());
-        for(std::size_t i=0;i<ranked.size();++i)ranked[i]=i;
-        std::sort(ranked.begin(),ranked.end(),[&](std::size_t a,std::size_t b){
-            const auto pa=score(selected,candidates[a]);
-            const auto pb=score(selected,candidates[b]);
-            if(pa!=pb)return pa>pb;
-            const auto alreadyA=textureIds.count(candidates[a].key)!=0;
-            const auto alreadyB=textureIds.count(candidates[b].key)!=0;
-            if(alreadyA!=alreadyB)return alreadyA;
-            return candidates[a].bytes<candidates[b].bytes;
-        });
+        // The GfxImage is obtained by walking the first inline Material of
+        // this XModel, never by comparing fuzzy strings or picking the first IWI.
+        // Only exact canonical image names can qualify for the pack.
         bool chosen=false;
         std::uint32_t slot=0;
-        for(std::size_t pass=0;pass<ranked.size()&&pass<160;++pass) {
-            const auto& candidate=candidates[ranked[pass]];
-            const auto matchScore=score(selected,candidate);
-            if(models.size()>1 && !selected.wanted.empty() &&
-               matchScore<90 && !textureIds.empty()) break; // do not guess a different texture
+        for(const auto& candidate : candidates) {
+            if(!bo1::texture_match::ExactImage(selected.wanted,candidate.name))
+                continue;
             const auto existing=textureIds.find(candidate.key);
             if(existing!=textureIds.end()) {
                 slot=existing->second;
@@ -387,24 +395,22 @@ std::wstring AutomaticExport(const std::wstring& folder,
                 chosen=true;
             }
             if(chosen) {
-                if(matchScore>=90)++nameMatches;
-                else ++fallbackMatches;
+                ++exactMatches;
                 break;
             }
         }
         if(!chosen) {
-            if(textureIds.empty())continue;
-            // A source with no resolved material uses the first known texture.
-            // This fallback is always reported as unverified in the GUI.
-            slot=0;
-            ++fallbackMatches;
+            ++unmatched;
+            continue; // Missing exact image: skip entire mesh; never assign grass.
         }
         pack.meshes.push_back(selected.mesh);
         pack.textureSlots.push_back(slot);
     }
     if(pack.meshes.empty() || pack.bc2.empty())
-        return L"Los modelos fueron encontrados pero ninguna textura DXT3 válida"
-               L" pudo extraerse de los .iwd/.iwi. No se creó el paquete.";
+
+        return L"Encontré modelos y GfxImage, pero ninguna textura .iwi "
+               L"coincidió EXACTAMENTE con el nombre de GfxImage "
+               L"(o no es DXT3). No inventé asociaciones.";
     std::vector<std::uint8_t> output;
     if(!bo1::scene_pack::Encode(pack,output,error))
         return L"El paquete supera los límites de tamaño: "+Wide(error);
@@ -420,21 +426,27 @@ std::wstring AutomaticExport(const std::wstring& folder,
              std::to_wstring(textureIds.size())+L" texturas; "+
              std::to_wstring(output.size()/1024)+L" KiB.\n";
     details+=L"Archivos FF examinados: "+std::to_wstring(attempted)+L".\n";
-    details+=L"Texturas por nombre de material: "+std::to_wstring(nameMatches)+
-             L"; asignaciones sin verificar: "+std::to_wstring(fallbackMatches)+L".\n";
+
+    details+=L"Coincidencias GfxImage exactas: "+std::to_wstring(exactMatches)+
+             L"; descartadas: "+std::to_wstring(unmatched)+L".\n";
+    details+=L"XAnim listados en directorios: "+std::to_wstring(xanimAssetEntries)+
+             L" (NO extraídos ni vinculados).\n";
+    details+=L"NOTA: solo primera textura/material de cada XModel;\n";
+    details+=L"las superficies adicionales necesitan resolver más materiales.\n";
     details+=L"IMPORTANTE: no es una escena original del mapa. Los modelos se\n";
     details+=L"muestran en posiciones de prueba; falta reconstruir GfxWorld.";
     return details;
 }
-void StartAutoExport() {
+void StartAutoExport(bool zombieOnly) {
     const auto folder=ChooseGameFolder();
     if(folder.empty())return;
     auto save=Pick(true,L"Paquete para iPhone (*.bo1scene)\0*.bo1scene\0\0",L"bo1scene");
     if(save.empty())return;
     busy=true;UpdateLabels();
     SetWindowTextW(statusLabel,L"Analizando FastFiles y asociaciones de texturas en IWD...");
-    std::thread([folder,save](){
-        auto value=std::make_unique<std::wstring>(AutomaticExport(folder,save));
+
+    std::thread([folder,save,zombieOnly](){
+        auto value=std::make_unique<std::wstring>(AutomaticExport(folder,save,zombieOnly));
         PostMessageW(windowHandle,Finished,0,
                     reinterpret_cast<LPARAM>(value.release()));
     }).detach();
@@ -457,31 +469,39 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
         const HINSTANCE module=GetModuleHandleW(nullptr);
         CreateWindowW(L"STATIC",L"BO1 Zombies • Preparador de escenas ligeras",
                       WS_CHILD|WS_VISIBLE,20,20,570,32,hwnd,nullptr,module,nullptr);
-        autoButton=CreateWindowW(L"BUTTON",L"AUTOMATICO: ANALIZAR CARPETA DEL JUEGO",
-                       WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON,20,60,540,46,hwnd,
+
+        zombieButton=CreateWindowW(L"BUTTON",L"BUSCAR ZOMBI + TEXTURA EXACTA (sin animación)",
+                       WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON,20,60,540,44,hwnd,
+                       reinterpret_cast<HMENU>(106),module,nullptr);
+        autoButton=CreateWindowW(L"BUTTON",L"OTROS MODELOS + TEXTURAS EXACTAS",
+                       WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,20,111,540,42,hwnd,
                        reinterpret_cast<HMENU>(105),module,nullptr);
         modelsLabel=CreateWindowW(L"STATIC",L"Modelos .ff: 0 / 6",
-                       WS_CHILD|WS_VISIBLE,20,122,530,28,hwnd,nullptr,module,nullptr);
+                       WS_CHILD|WS_VISIBLE,20,161,530,28,hwnd,nullptr,module,nullptr);
         addModelButton=CreateWindowW(L"BUTTON",L"1. Añadir modelo .ff",
-                       WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,20,156,265,42,hwnd,
+                       WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,20,195,265,42,hwnd,
                        reinterpret_cast<HMENU>(101),module,nullptr);
         clearButton=CreateWindowW(L"BUTTON",L"Limpiar modelos",
-                       WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,295,156,265,42,hwnd,
+                       WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,295,195,265,42,hwnd,
                        reinterpret_cast<HMENU>(104),module,nullptr);
         imageButton=CreateWindowW(L"BUTTON",L"2. Elegir textura .iwi (DXT3)",
-                       WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,20,210,540,42,hwnd,
+                       WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,20,248,540,42,hwnd,
                        reinterpret_cast<HMENU>(102),module,nullptr);
         saveButton=CreateWindowW(L"BUTTON",L"3. Exportar escena .bo1scene",
-                       WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,20,264,540,42,hwnd,
+                       WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,20,299,540,42,hwnd,
                        reinterpret_cast<HMENU>(103),module,nullptr);
-        statusLabel=CreateWindowW(L"STATIC",
-                       L"Seleccioná AUTOMATICO para buscar recursos dentro del juego sin extraer .iwi.\nLos controles manuales son opcionales. Todavía no interpreta GfxWorld.",
-                       WS_CHILD|WS_VISIBLE|SS_LEFT,20,320,550,120,hwnd,nullptr,module,nullptr);
+
+        statusLabel=CreateWindowW(L"EDIT",
+                       L"Seleccioná buscar ZOMBI: solo imágenes que coincidan con el material.\r\n"
+                       L"El lector todavía no recupera XAnim ni el rig animado.",
+                       WS_CHILD|WS_VISIBLE|WS_VSCROLL|ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL,
+                       20,357,550,165,hwnd,nullptr,module,nullptr);
         UpdateLabels();return 0;
     }
     if(msg==WM_COMMAND) {
         switch(LOWORD(w)) {
-        case 105: if(!busy)StartAutoExport();return 0;
+        case 105: if(!busy)StartAutoExport(false);return 0;
+        case 106: if(!busy)StartAutoExport(true);return 0;
         case 101: {
             auto picked=Pick(false,L"FastFiles (*.ff)\0*.ff\0\0",L"ff");
             if(!picked.empty()&&files.size()<bo1::scene_pack::MaxModels) {
@@ -520,7 +540,7 @@ int WINAPI wWinMain(HINSTANCE module,HINSTANCE,LPWSTR,int show) {
     if(!RegisterClassW(&c))return 1;
     windowHandle=CreateWindowW(className,L"BO1 iOS - Escena para iPhone",
         WS_OVERLAPPEDWINDOW&~WS_THICKFRAME&~WS_MAXIMIZEBOX,CW_USEDEFAULT,
-        CW_USEDEFAULT,610,500,nullptr,nullptr,module,nullptr);
+        CW_USEDEFAULT,610,585,nullptr,nullptr,module,nullptr);
     if(!windowHandle)return 1;
     ShowWindow(windowHandle,show);UpdateWindow(windowHandle);
     MSG message;
