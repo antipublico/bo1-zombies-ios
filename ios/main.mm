@@ -386,13 +386,26 @@ static NSString* InspectionTextForPath(const char* path, BOOL* success)
             const bool passed = CheckNativeComponents(error) && CheckSyntheticFastfile(error) &&
                 bo1::tests::CheckNativeAssetFixture(path.fileSystemRepresentation, error) &&
                 bo1::tests::CheckTechsetFixture(path.fileSystemRepresentation, error);
+            // simctl --console may miss stdout if the app exits before the
+            // simulator connects its log pipe. Persist a deterministic result
+            // in the app data container before exiting for CI to inspect.
+            NSString* marker = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                @"bo1-native-self-test.txt"];
+            NSString* status = passed ? @"BO1_IOS_SELF_TEST_PASS"
+                : [NSString stringWithFormat:@"BO1_IOS_SELF_TEST_FAIL: %s", error.c_str()];
+            NSError* markerError = nil;
+            const BOOL wroteMarker = [status writeToFile:marker atomically:YES
+                encoding:NSUTF8StringEncoding error:&markerError];
             if (passed)
                 std::puts("BO1_IOS_SELF_TEST_PASS");
             else
                 std::fprintf(stderr, "BO1_IOS_SELF_TEST_FAIL: %s\n", error.c_str());
+            if (!wroteMarker)
+                std::fprintf(stderr, "BO1_IOS_SELF_TEST_MARKER_FAIL: %s\n",
+                    markerError.localizedDescription.UTF8String);
             std::fflush(stdout);
             std::fflush(stderr);
-            std::exit(passed ? 0 : 1);
+            std::exit(passed && wroteMarker ? 0 : 1);
         });
     }
 }
