@@ -172,6 +172,8 @@ int main(int argc, char** argv)
                                 " resource bytes %" PRId32 " (pixel payload unread)\n",
                                 unsigned(image.loadDefLevels), unsigned(image.loadDefFlags),
                                 image.loadDefFormat, image.loadDefResourceSize);
+                        if (image.loadDefInsertedAlias)
+                            std::printf("First inline GfxImageLoadDef inserted 4-byte block-4 alias slot (-2 tag).\n");
                         else if (image.loadDefPending)
                             std::printf("First inline GfxImageLoadDef not embedded or not yet decoded.\n");
                     }

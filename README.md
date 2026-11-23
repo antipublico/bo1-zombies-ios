@@ -96,9 +96,11 @@ reads the fixed 16-byte MaterialTextureDef records and reports each texture
 semantic and serialized GfxImage/water pointer. If the first recursive
 child is an inline image (rather than water), the Windows inspector also
 decodes that image's 52-byte header and name, including dimensions, mip count,
-pixel sizes and pointer tags. For an inline -1 GfxTextureLoad, the inspector
-also decodes its 12-byte GfxImageLoadDef header (format, flags, resource length)
-without reading or allocating pixel payload bytes. Inline water payloads,
+pixel sizes and pointer tags. For inline -1 or -2 GfxTextureLoad pointers, the inspector
+also decodes the 12-byte GfxImageLoadDef header (format, flags, resource length).
+A -2 pointer reserves one 4-byte block-4 alias slot without consuming extra
+compressed FILE bytes, following DB_InsertPointer in the original loader.
+Neither path reads or allocates pixel payload bytes. Inline water payloads,
 texture constants, state bits and other Material children remain unresolved.
 No texture is uploaded to a GPU. Shader execution and physics integration are pending.
 `AssetPrefix::pendingXModel` retains the counts, tags and four LOD descriptors

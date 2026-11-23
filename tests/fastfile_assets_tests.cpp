@@ -520,6 +520,37 @@ int main()
         && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32
             + 52 + sizeof(imageName),
         "referenced GfxImageLoadDef does not consume inline bytes");
+    // Real v473 texture '~-gt5_foliage_desert_brush02_c' uses -2, not
+    // -1. This inserts one 4-byte alias slot in block 4 and then consumes
+    // exactly the same 12 FILE bytes as an inline -1 GfxImageLoadDef.
+    auto insertedLoadDef = withImage;
+    Put32(insertedLoadDef, imageOffset, UINT32_MAX - 1);
+    load(insertedLoadDef, InspectionResult::Ok, imageLimits);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->inlineLoadDefHeader
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefInsertedAlias
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefLevels == 5
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefFormat == 21
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->loadDefResourceSize == 16384
+        && result.pendingXModelSkeleton->firstInlineMaterial->firstInlineImage->textureTag == UINT32_MAX - 1
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName) + 32
+            + 52 + sizeof(imageName) + 12,
+        "-2 GfxTextureLoad inserts a pointer slot without consuming FILE bytes");
+    auto insertedTruncated = insertedLoadDef;
+    insertedTruncated.resize(loadDefOffset + 11);
+    Put32(insertedTruncated, 0,
+        static_cast<uint32_t>(insertedTruncated.size() - 36));
+    load(insertedTruncated, InspectionResult::InvalidFormat, imageLimits);
+    Check(!result.pendingXModelSkeleton,
+        "truncated -2 GfxImageLoadDef never publishes a partial preview");
+    auto insertedInvalidSize = insertedLoadDef;
+    bo1::bytecode::Store<int32_t>(insertedInvalidSize.data() + loadDefOffset + 8, -1);
+    load(insertedInvalidSize, InspectionResult::InvalidFormat, imageLimits);
+    Check(!result.pendingXModelSkeleton,
+        "-2 GfxImageLoadDef rejects negative texture resource sizes");
+
     auto waterFirst = withImage;
     waterFirst[textureOffset + 7] = 11;
     Put32(waterFirst, 0, static_cast<uint32_t>(waterFirst.size() - 36));

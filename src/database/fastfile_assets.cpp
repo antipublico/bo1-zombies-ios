@@ -602,8 +602,18 @@ private:
             if (!Charge(std::strlen(name) + 1)) return false;
             image.name.assign(name);
         }
-        if (image.textureTag == UINT32_MAX)
+        if (image.textureTag == UINT32_MAX
+            || image.textureTag == UINT32_MAX - 1)
         {
+            // db_load.cpp::Load_GfxTextureLoad: -2 invokes DB_InsertPointer()
+            // after entering block 0, before Load_GfxImageLoadDef(1). That
+            // reserves 4 aligned bytes in persistent block 4, but does not
+            // consume any compressed FILE bytes.
+            if (image.textureTag == UINT32_MAX - 1)
+            {
+                if (!AdvanceBlock(4, 4)) return false;
+                image.loadDefInsertedAlias = true;
+            }
             unsigned char loadDef[12]{};
             if (!temp.Advance(sizeof(loadDef), 4))
                 return Fail("GfxImageLoadDef exceeds temporary block 0.");

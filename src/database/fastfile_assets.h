@@ -73,9 +73,12 @@ struct XImageHeaderPreview
     uint8_t streaming = 0;
     bool delayLoadPixels = false;
     // GfxImageLoadDef starts with a 12-byte header. Only inspect that header
-    // for -1 inline load-def pointers; the resourceSize pixel bytes remain
-    // in the file and are not copied, decoded or uploaded.
+    // for inline -1 and -2 load-def pointers; the resourceSize pixel bytes
+    // remain in the file and are not copied, decoded or uploaded.
     bool inlineLoadDefHeader = false;
+    // GfxTextureLoad tag -2 calls DB_InsertPointer, reserving an aligned
+    // 4-byte alias slot in block 4 before reading the 12-byte TEMP header.
+    bool loadDefInsertedAlias = false;
     bool loadDefPending = false;
     uint8_t loadDefLevels = 0;
     uint8_t loadDefFlags = 0;
