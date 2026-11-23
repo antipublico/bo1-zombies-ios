@@ -73,6 +73,11 @@ if (BUILD_TESTING)
     target_compile_features(bo1_temp_stream_tests PRIVATE cxx_std_17)
     add_test(NAME temp_stream COMMAND bo1_temp_stream_tests)
 
+    add_executable(bo1_xmodel_header_tests tests/xmodel_header_tests.cpp)
+    target_include_directories(bo1_xmodel_header_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(bo1_xmodel_header_tests PRIVATE cxx_std_17)
+    add_test(NAME xmodel_header COMMAND bo1_xmodel_header_tests)
+
     if (BO1_BUILD_FASTFILE_INSPECTOR)
         find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
         add_test(NAME fastfile_inspect
