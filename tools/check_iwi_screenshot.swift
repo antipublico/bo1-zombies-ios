@@ -103,22 +103,40 @@ func readPNG(_ path: String) throws -> NSBitmapImageRep {
 }
 
 func syntheticBitmap(_ colors: [[Int]]) throws -> NSBitmapImageRep {
+    // CI on macOS 26 can create an unusable colorspace (-1) when a headless
+    // AppKit process constructs NSBitmapImageRep(bitmapDataPlanes: nil,
+    // colorSpaceName: .deviceRGB). Instead generate a canonical sRGB PNG
+    // through CGImage, and decode it via the SAME readPNG path used for simctl.
     guard colors.count == 4,
-          let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 16, pixelsHigh: 16,
-              bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-              colorSpaceName: .deviceRGB, bitmapFormat: [.alphaNonpremultiplied],
-              bytesPerRow: 16 * 4, bitsPerPixel: 32) else {
-        throw CheckFailure("Cannot create the checker self-test bitmap.")
+          let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
+        throw CheckFailure("Cannot initialize the checker self-test colorspace.")
     }
+    var rgba = [UInt8](repeating: 0, count: 16 * 16 * 4)
     for y in 0..<16 {
         for x in 0..<16 {
-            let rgba = colors[(y >= 8 ? 2 : 0) + (x >= 8 ? 1 : 0)]
-            let color = NSColor(srgbRed: CGFloat(rgba[0]) / 255,
-                                green: CGFloat(rgba[1]) / 255,
-                                blue: CGFloat(rgba[2]) / 255,
-                                alpha: CGFloat(rgba[3]) / 255)
-            bitmap.setColor(color, atX: x, y: y)
+            let channels = colors[(y >= 8 ? 2 : 0) + (x >= 8 ? 1 : 0)]
+            guard channels.count == 4, channels.allSatisfy({ (0...255).contains($0) }) else {
+                throw CheckFailure("Invalid checker self-test color.")
+            }
+            let index = (y * 16 + x) * 4
+            for channel in 0..<4 {
+                rgba[index + channel] = UInt8(channels[channel])
+            }
         }
+    }
+    let byteBuffer = Data(rgba)
+    guard let provider = CGDataProvider(data: byteBuffer as CFData),
+          let cgImage = CGImage(
+              width: 16, height: 16, bitsPerComponent: 8, bitsPerPixel: 32,
+              bytesPerRow: 16 * 4, space: colorSpace,
+              bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue)
+                  .union(.byteOrder32Big),
+              provider: provider, decode: nil, shouldInterpolate: false,
+              intent: .defaultIntent),
+          let png = NSBitmapImageRep(cgImage: cgImage)
+              .representation(using: .png, properties: [:]),
+          let bitmap = NSBitmapImageRep(data: png) else {
+        throw CheckFailure("Cannot create the checker self-test PNG.")
     }
     return bitmap
 }
