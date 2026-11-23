@@ -444,6 +444,58 @@ private:
             else ++preview.referencedMaterials;
         }
         preview.materialHandleBytes = bytes;
+        if (limits.previewFirstMaterialHeader && preview.inlineMaterials)
+            return FirstInlineMaterial(preview);
+        return true;
+    }
+
+    bool FirstInlineMaterial(XModelSkeletonPreview& preview)
+    {
+        size_t first = preview.materialHandleTags.size();
+        for (size_t i = 0; i < preview.materialHandleTags.size(); ++i)
+        {
+            const uint32_t tag = preview.materialHandleTags[i];
+            if (tag == UINT32_MAX || tag == UINT32_MAX - 1)
+            {
+                first = i;
+                break;
+            }
+        }
+        if (first == preview.materialHandleTags.size()) return true;
+        // Load_MaterialHandle enters TEMP (block 0) for an inline Material.
+        // Its 192-byte header follows the parent XModel in that block.
+        // The name is read from block 4, before any nested technique/texture.
+        constexpr size_t MaterialDiskSize = 192;
+        unsigned char disk[MaterialDiskSize]{};
+        if (!temp.Advance(MaterialDiskSize, 4))
+            return Fail("First inline Material exceeds temporary block 0.");
+        if (!Read(disk, sizeof(disk))) return false;
+        XMaterialHeaderPreview material{};
+        material.slot = first;
+        material.nameTag = bytecode::Load<uint32_t>(disk);
+        material.gameFlags = bytecode::Load<uint32_t>(disk + 4);
+        material.sortKey = disk[9];
+        material.textureAtlasRows = disk[10];
+        material.textureAtlasColumns = disk[11];
+        material.textureCount = disk[170];
+        material.constantCount = disk[171];
+        material.stateBitsCount = disk[172];
+        material.stateFlags = disk[173];
+        material.cameraRegion = disk[174];
+        material.maxStreamedMips = disk[175];
+        material.techniqueSetTag = bytecode::Load<uint32_t>(disk + 176);
+        material.textureTableTag = bytecode::Load<uint32_t>(disk + 180);
+        material.constantTableTag = bytecode::Load<uint32_t>(disk + 184);
+        material.stateBitsTableTag = bytecode::Load<uint32_t>(disk + 188);
+        const char* name = nullptr;
+        if (!String(material.nameTag, name)) return false;
+        if (name)
+        {
+            if (!Charge(std::strlen(name) + 1)) return false;
+            material.name.assign(name);
+        }
+        if (!Charge(sizeof(XMaterialHeaderPreview))) return false;
+        preview.firstInlineMaterial = std::move(material);
         return true;
     }
 

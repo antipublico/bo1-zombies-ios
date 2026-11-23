@@ -89,8 +89,10 @@ translations, classifications and base matrices) as **diagnostic metadata**,
 then reads the contiguous 68-byte XSurface header array (if present) and its
 nested inline vertex/index/rigid-list/collision-tree payloads into CPU-only
 buffers. It then reads the original MaterialHandle pointer-slot table and
-classifies inline/shared/empty Win32 tags, stopping before recursive Material
-payloads, shader execution and physics integration.
+classifies inline/shared/empty Win32 tags. The Windows CLI also opts into a
+strictly bounded 192-byte preview of the first inline Material header and
+its name, while leaving its technique, texture, constant and state-bits
+children unresolved. Shader execution and physics integration are pending.
 `AssetPrefix::pendingXModel` retains the counts, tags and four LOD descriptors
 without casting serialized pointers to ARM64 pointers. The iOS inspector
 reports these values and an estimate of fixed-size inline child arrays.

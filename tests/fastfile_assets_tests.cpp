@@ -329,6 +329,60 @@ int main()
         && result.pendingXModelSkeleton->materialHandleTags[1] == UINT32_MAX - 1
         && result.pendingXModelSkeleton->materialHandleTags[2] == 0x80000011u,
         "XModel MaterialHandle array preserves Win32 tags without dereferencing them");
+    auto materialWithHeader = taggedMaterials;
+    constexpr size_t materialOffset = modelStart + XModelDiskHeaderSize
+        + 12 * XSurfaceDiskHeaderSize + 12 * 4;
+    materialWithHeader.resize(materialOffset + 192, 0);
+    Put32(materialWithHeader, materialOffset + 0, UINT32_MAX); // Inline MaterialInfo name.
+    Put32(materialWithHeader, materialOffset + 4, 0x1234ABCDu); // gameFlags.
+    materialWithHeader[materialOffset + 9] = 7; // sortKey.
+    materialWithHeader[materialOffset + 170] = 2; // textures.
+    materialWithHeader[materialOffset + 171] = 3; // constants.
+    materialWithHeader[materialOffset + 172] = 4; // state bits.
+    Put32(materialWithHeader, materialOffset + 176, 0x80000011u);
+    Put32(materialWithHeader, materialOffset + 180, UINT32_MAX);
+    Put32(materialWithHeader, materialOffset + 184, UINT32_MAX);
+    Put32(materialWithHeader, materialOffset + 188, UINT32_MAX);
+    const char materialName[] = "t5_foliage";
+    materialWithHeader.insert(materialWithHeader.end(), materialName,
+        materialName + sizeof(materialName));
+    Put32(materialWithHeader, 0,
+        static_cast<uint32_t>(materialWithHeader.size() - 36));
+    AssetLoadLimits deep;
+    deep.previewFirstMaterialHeader = true;
+    load(materialWithHeader, InspectionResult::Ok, deep);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial.has_value()
+        && result.pendingXModelSkeleton->firstInlineMaterial->slot == 0
+        && result.pendingXModelSkeleton->firstInlineMaterial->name == "t5_foliage"
+        && result.pendingXModelSkeleton->firstInlineMaterial->gameFlags == 0x1234ABCDu
+        && result.pendingXModelSkeleton->firstInlineMaterial->sortKey == 7
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureCount == 2
+        && result.pendingXModelSkeleton->firstInlineMaterial->constantCount == 3
+        && result.pendingXModelSkeleton->firstInlineMaterial->stateBitsCount == 4
+        && result.pendingXModelSkeleton->firstInlineMaterial->techniqueSetTag == 0x80000011u
+        && result.pendingXModelSkeleton->firstInlineMaterial->textureTableTag == UINT32_MAX
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192 + sizeof(materialName),
+        "opt-in Material header preview retains name and serialized pointer tags");
+    auto truncatedMaterial = materialWithHeader;
+    truncatedMaterial.resize(materialOffset + 191);
+    Put32(truncatedMaterial, 0,
+        static_cast<uint32_t>(truncatedMaterial.size() - 36));
+    load(truncatedMaterial, InspectionResult::InvalidFormat, deep);
+    Check(!result.pendingXModelSkeleton,
+        "truncated nested Material header publishes no partial model");
+    auto materialNoName = materialWithHeader;
+    Put32(materialNoName, materialOffset, 0);
+    materialNoName.resize(materialOffset + 192);
+    Put32(materialNoName, 0,
+        static_cast<uint32_t>(materialNoName.size() - 36));
+    load(materialNoName, InspectionResult::Ok, deep);
+    Check(result.pendingXModelSkeleton
+        && result.pendingXModelSkeleton->firstInlineMaterial
+        && result.pendingXModelSkeleton->firstInlineMaterial->name.empty()
+        && result.decodedAssetBytes == 252 + 816 + 48 + 192,
+        "nested Material with null name consumes only its fixed header");
+
     auto truncatedHandles = modelPayload;
     truncatedHandles.pop_back();
     Put32(truncatedHandles, 0, static_cast<uint32_t>(truncatedHandles.size() - 36));

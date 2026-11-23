@@ -38,6 +38,29 @@ struct XSurfaceBodyPreview
     uint64_t inlineBodyBytes = 0;
 };
 
+// Diagnostic-only snapshot of the first inline Material header nested in an
+// XModel. Child pointers/tables remain serialized tags, never native pointers.
+struct XMaterialHeaderPreview
+{
+    size_t slot = 0;
+    std::string name;
+    uint32_t nameTag = 0;
+    uint32_t gameFlags = 0;
+    uint32_t techniqueSetTag = 0;
+    uint32_t textureTableTag = 0;
+    uint32_t constantTableTag = 0;
+    uint32_t stateBitsTableTag = 0;
+    uint8_t sortKey = 0;
+    uint8_t textureAtlasRows = 0;
+    uint8_t textureAtlasColumns = 0;
+    uint8_t textureCount = 0;
+    uint8_t constantCount = 0;
+    uint8_t stateBitsCount = 0;
+    uint8_t stateFlags = 0;
+    uint8_t cameraRegion = 0;
+    uint8_t maxStreamedMips = 0;
+};
+
 struct XModelSkeletonPreview
 {
     std::string name;
@@ -66,6 +89,9 @@ struct XModelSkeletonPreview
     uint32_t inlineMaterials = 0;
     uint32_t referencedMaterials = 0;
     uint32_t emptyMaterialSlots = 0;
+    // Only populated when explicitly requested by the CLI. Recursive material
+    // children are still unresolved; only the first inline header is read.
+    std::optional<XMaterialHeaderPreview> firstInlineMaterial;
 };
 
 struct NativeAsset
@@ -84,6 +110,10 @@ struct AssetLoadLimits
     // Bounds accounted payload and bookkeeping sizes, excluding allocator
     // overhead and container spare capacity. Inspection has its own limit.
     size_t maxNativeBytes = 32 * 1024 * 1024;
+    // Opt-in diagnostic: decode the first nested, 192-byte Win32 Material
+    // header and name after its parent XModel's material pointer table.
+    // Leave false for strict header-only callers and existing fixtures.
+    bool previewFirstMaterialHeader = false;
 };
 
 struct AssetPrefix

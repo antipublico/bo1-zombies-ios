@@ -17,7 +17,9 @@ int main(int argc, char** argv)
     Inspection inspection;
     AssetPrefix native;
     std::string error;
-    const auto result = loadAssets ? LoadAssetPrefix(argv[2], native, error)
+    AssetLoadLimits loadLimits;
+    loadLimits.previewFirstMaterialHeader = true; // Local diagnostic only.
+    const auto result = loadAssets ? LoadAssetPrefix(argv[2], native, error, loadLimits)
                                    : InspectFile(argv[1], inspection, error);
     if (result != InspectionResult::Ok)
     {
@@ -120,6 +122,21 @@ int main(int argc, char** argv)
                 for (size_t i = 0; i < skel.materialHandleTags.size() && i < 12; ++i)
                     std::printf("XModel material slot %zu Win32 tag 0x%08" PRIx32 "\n",
                         i, skel.materialHandleTags[i]);
+                if (skel.firstInlineMaterial)
+                {
+                    const auto& material = *skel.firstInlineMaterial;
+                    std::printf("First inline Material slot %zu name %s\n", material.slot,
+                        material.name.empty() ? "(not resolved)" : material.name.c_str());
+                    std::printf("First inline Material counts textures %u constants %u stateBits %u sortKey %u\n",
+                        unsigned(material.textureCount), unsigned(material.constantCount),
+                        unsigned(material.stateBitsCount), unsigned(material.sortKey));
+                    std::printf("First inline Material tags technique 0x%08" PRIx32
+                        " textures 0x%08" PRIx32 " constants 0x%08" PRIx32
+                        " stateBits 0x%08" PRIx32 "\n",
+                        material.techniqueSetTag, material.textureTableTag,
+                        material.constantTableTag, material.stateBitsTableTag);
+                    std::printf("First inline Material is a header-only diagnostic, nested resources unresolved.\n");
+                }
                 for (size_t i = 0; i < skel.surfaceHeaders.size() && i < 12; ++i)
                 {
                     const auto& s = skel.surfaceHeaders[i];
